@@ -496,8 +496,12 @@ LRESULT CALLBACK wf_event_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam
 				hdc = BeginPaint(hWnd, &ps);
 				const int x = ps.rcPaint.left;
 				const int y = ps.rcPaint.top;
-				const int w = ps.rcPaint.right - ps.rcPaint.left + 1;
-				const int h = ps.rcPaint.bottom - ps.rcPaint.top + 1;
+				/* rcPaint right/bottom are exclusive, so the width/height are
+				 * (right - left) / (bottom - top). Adding +1 here blits one
+				 * pixel past the source surface and leaves an uncovered black
+				 * seam at the right/bottom edge of the invalidated rectangle. */
+				const int w = ps.rcPaint.right - ps.rcPaint.left;
+				const int h = ps.rcPaint.bottom - ps.rcPaint.top;
 				wf_scale_blt(wfc, hdc, x, y, w, h, wfc->primary->hdc,
 				             x - wfc->offset_x + wfc->xCurrentScroll,
 				             y - wfc->offset_y + wfc->yCurrentScroll, SRCCOPY);

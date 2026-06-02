@@ -105,6 +105,18 @@ static BOOL wf_end_paint(rdpContext* context)
 	if (!hdc->hwnd)
 		return TRUE;
 
+	/* The primary surface is a DIB section that is written both directly
+	 * (GFX / software decoder writes straight to gdi->primary_buffer) and via
+	 * batched GDI calls (the order handlers issue BitBlt/PatBlt/FillRect on
+	 * wfc->primary->hdc). Windows batches GDI calls that return BOOL, so a
+	 * batched draw can be applied to the DIB bits *after* a later direct memory
+	 * write, silently overwriting freshly decoded pixels and leaving a stale
+	 * "black block". Flush the GDI batch at the frame boundary so the DIB bits
+	 * are coherent before the resulting WM_PAINT copies the surface to screen.
+	 * See https://learn.microsoft.com/windows/win32/api/wingdi/nf-wingdi-gdiflush
+	 */
+	GdiFlush();
+
 	HGDI_WND hwnd = hdc->hwnd;
 	WINPR_ASSERT(hwnd->invalid || (hwnd->ninvalid == 0));
 
@@ -183,7 +195,7 @@ static BOOL wf_begin_paint(rdpContext* context)
 
 static BOOL wf_desktop_resize(rdpContext* context)
 {
-	BOOL same;
+	BOOL same = FALSE;
 	RECT rect;
 	rdpSettings* settings;
 	wfContext* wfc = (wfContext*)context;
@@ -193,31 +205,50 @@ static BOOL wf_desktop_resize(rdpContext* context)
 
 	settings = context->settings;
 
+	const UINT32 dw = freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth);
+	const UINT32 dh = freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight);
+
 	if (wfc->primary)
 	{
 		same = (wfc->primary == wfc->drawing) ? TRUE : FALSE;
 		wf_image_free(wfc->primary);
-		wfc->primary =
-		    wf_image_new(wfc, freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth),
-		                 freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight),
-		                 context->gdi->dstFormat, nullptr);
+		wfc->primary = wf_image_new(wfc, dw, dh, context->gdi->dstFormat, nullptr);
+
+		/* The freshly allocated DIB section is uninitialized. With the graphics
+		 * pipeline (GFX/H.264) the server only sends delta regions after a
+		 * resize, so any pixel not covered by a delta would keep the garbage
+		 * (typically rendered as a black block). Clear it explicitly, exactly
+		 * like the initial surface setup does. */
+		if (!wfc->primary)
+		{
+			WLog_ERR(TAG, "Failed to reallocate primary surface on desktop resize");
+			return FALSE;
+		}
+
+		BitBlt(wfc->primary->hdc, 0, 0, (int)dw, (int)dh, nullptr, 0, 0, BLACKNESS);
 	}
 
-	if (!gdi_resize_ex(context->gdi, freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth),
-	                   freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight), 0,
-	                   context->gdi->dstFormat, wfc->primary->pdata, nullptr))
+	if (!gdi_resize_ex(context->gdi, dw, dh, 0, context->gdi->dstFormat, wfc->primary->pdata,
+	                   nullptr))
 		return FALSE;
 
 	if (same)
 		wfc->drawing = wfc->primary;
 
+	/* Force a full repaint of both the offscreen surface region tracking and
+	 * the on-screen window so no stale (black) region from the previous size
+	 * survives the resize. wf_invalidate_region() marks the GDI primary region
+	 * dirty and schedules a WM_PAINT for the window. */
+	wf_invalidate_region(wfc, 0, 0, dw, dh);
+
 	if (wfc->fullscreen != TRUE)
 	{
 		if (wfc->hwnd && !freerdp_settings_get_bool(settings, FreeRDP_SmartSizing))
-			SetWindowPos(wfc->hwnd, HWND_TOP, -1, -1,
-			             freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth) + wfc->diff.x,
-			             freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight) + wfc->diff.y,
-			             SWP_NOMOVE);
+			SetWindowPos(wfc->hwnd, HWND_TOP, -1, -1, (int)(dw + wfc->diff.x),
+			             (int)(dh + wfc->diff.y), SWP_NOMOVE);
+
+		if (wfc->hwnd)
+			InvalidateRect(wfc->hwnd, nullptr, TRUE);
 	}
 	else
 	{
