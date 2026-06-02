@@ -211,7 +211,7 @@ static const COMMAND_LINE_ARGUMENT_A global_cmd_args[] = {
 	{ "gfx", COMMAND_LINE_VALUE_OPTIONAL,
 	  "[[progressive[:on|off]|RFX[:on|off]|AVC420[:on|off]AVC444[:on|off]],mask:<value>,small-"
 	  "cache[:on|off],thin-client[:on|off],progressive[:on|"
-	  "off],frame-ack[:on|off]"
+	  "off],frame-ack[:on|off],conceal-black[:on|off]"
 #if defined(WITH_GFX_AV1)
 	  ",AV1[:on|off|i444|i420]]"
 #endif
@@ -224,7 +224,7 @@ static const COMMAND_LINE_ARGUMENT_A global_cmd_args[] = {
 #else
 	{ "gfx", COMMAND_LINE_VALUE_OPTIONAL,
 	  "[progressive[:on|off]|RFX[:on|off]|AVC420[:on|off]AVC444[:on|off]],mask:<value>,small-cache["
-	  ":on|off],thin-client[:on|off],progressive[:on|off]]",
+	  ":on|off],thin-client[:on|off],progressive[:on|off],conceal-black[:on|off]]",
 	  nullptr, nullptr, -1, nullptr, "RDP8 graphics pipeline" },
 #endif
 #if defined(WITH_FREERDP_DEPRECATED_COMMANDLINE)

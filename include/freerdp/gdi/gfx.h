@@ -54,6 +54,14 @@ extern "C"
 #else
 	    void* reservedAV1;
 #endif
+		/* Error concealment state: a copy of the last successfully presented
+		 * surface content plus a per-macroblock-tile counter, used to hide
+		 * black-block corruption baked into the encoded H.264 stream by a
+		 * faulty hardware encoder (e.g. NVENC GPU faults).
+		 * @since version 3.x.x */
+		BYTE* prevFrame;
+		BYTE* concealAge;
+		BOOL prevFrameValid;
 	};
 	typedef struct gdi_gfx_surface gdiGfxSurface;
 

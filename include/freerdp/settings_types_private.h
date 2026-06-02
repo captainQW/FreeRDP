@@ -859,7 +859,10 @@ struct rdp_settings
 	SETTINGS_DEPRECATED(ALIGN64 UINT32 Floatbar);                /* 5196 */
 	SETTINGS_DEPRECATED(ALIGN64 UINT32 TcpConnectTimeout);       /* 5197 */
 	SETTINGS_DEPRECATED(ALIGN64 UINT32 FakeMouseMotionInterval); /* 5198 */
-	UINT64 padding5312[5312 - 5199];                             /* 5199 */
+	SETTINGS_DEPRECATED(ALIGN64 BOOL GfxConcealBlackBlocks);     /** 5199
+	                                                              * @since version 3.x.x
+	                                                              */
+	UINT64 padding5312[5312 - 5200];                             /* 5200 */
 
 	/**
 	 * WARNING: End of ABI stable zone!

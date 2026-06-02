@@ -2489,6 +2489,15 @@ static int parse_gfx_options(rdpSettings* settings, const COMMAND_LINE_ARGUMENT_
 					}
 				}
 #endif
+				else if (option_starts_with("conceal-black", val))
+				{
+					const PARSE_ON_OFF_RESULT bval = parse_on_off_option(val);
+					if (bval == PARSE_FAIL)
+						rc = COMMAND_LINE_ERROR_UNEXPECTED_VALUE;
+					else if (!freerdp_settings_set_bool(settings, FreeRDP_GfxConcealBlackBlocks,
+					                                    bval != PARSE_OFF))
+						rc = COMMAND_LINE_ERROR;
+				}
 				else
 					rc = COMMAND_LINE_ERROR;
 			}

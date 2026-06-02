@@ -35,6 +35,11 @@
 
 #define TAG FREERDP_TAG("gdi")
 
+#ifdef WITH_GFX_H264
+#define GFX_CONCEAL_TILE 16u   /* H.264 macroblock size */
+#define GFX_CONCEAL_MAX_AGE 4u /* present concealed content for at most N frames */
+#endif
+
 static BOOL is_rect_valid(const RECTANGLE_16* rect, size_t width, size_t height)
 {
 	if (!rect)
@@ -144,6 +149,17 @@ static UINT gdi_ResetGraphics(RdpgfxClientContext* context,
 
 		memset(surface->data, 0xFF, (size_t)surface->scanline * surface->height);
 		region16_clear(&surface->invalidRegion);
+#ifdef WITH_GFX_H264
+		/* The surface content was just reset; drop the stale concealment
+		 * reference so we do not compare fresh data against old pixels. */
+		surface->prevFrameValid = FALSE;
+		if (surface->concealAge)
+		{
+			const UINT32 tx = (surface->width + GFX_CONCEAL_TILE - 1) / GFX_CONCEAL_TILE;
+			const UINT32 tyy = (surface->height + GFX_CONCEAL_TILE - 1) / GFX_CONCEAL_TILE;
+			memset(surface->concealAge, 0, 1ull * tx * tyy);
+		}
+#endif
 	}
 
 	free(pSurfaceIds);
@@ -671,6 +687,172 @@ fail:
 	return status;
 }
 
+/* ===========================================================================
+ * H.264 black-block error concealment
+ *
+ * Some hardware encoders (observed with faulting NVIDIA NVENC, server event
+ * log "nvlddmkm" Event ID 153) intermittently emit macroblocks filled with
+ * pure black into an otherwise valid H.264 bitstream. Because the RDP graphics
+ * pipeline is delta encoded, such a corrupt black block can persist on screen
+ * until the server happens to redraw that area.
+ *
+ * To hide this without affecting the user experience we keep a copy of the
+ * previously presented surface content. After a frame is decoded we inspect the
+ * freshly written region in macroblock-sized tiles: any tile that just turned
+ * uniformly pure black while the previous frame had real (non-black) content is
+ * treated as corruption and restored from the previous frame. A small per-tile
+ * age counter bounds how long content may be concealed, so a genuinely black
+ * region (sustained by the server across several frames) is still shown.
+ *
+ * The feature is opt-in via the FREERDP_GFX_CONCEAL_BLACK environment variable
+ * to avoid any behavioural change for unaffected setups.
+ * ===========================================================================
+ */
+#ifdef WITH_GFX_H264
+/* Returns TRUE when every pixel in the rectangle is fully opaque black. */
+static BOOL gfx_tile_is_pure_black(const BYTE* data, UINT32 stride, UINT32 format, UINT32 x,
+                                   UINT32 y, UINT32 w, UINT32 h)
+{
+	const UINT32 bpp = FreeRDPGetBytesPerPixel(format);
+
+	for (UINT32 ty = 0; ty < h; ty++)
+	{
+		const BYTE* line = &data[1ull * (y + ty) * stride + 1ull * x * bpp];
+		for (UINT32 tx = 0; tx < w; tx++)
+		{
+			const BYTE* px = &line[1ull * tx * bpp];
+			/* Ignore the alpha byte: only the colour channels matter for the
+			 * "is this pixel black" decision (surfaces are BGRX/BGRA32). */
+			if (px[0] != 0 || px[1] != 0 || px[2] != 0)
+				return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+/* Copy a tile rectangle between two buffers that share the same geometry. */
+static void gfx_copy_tile(BYTE* dst, const BYTE* src, UINT32 stride, UINT32 format, UINT32 x,
+                          UINT32 y, UINT32 w, UINT32 h)
+{
+	const UINT32 bpp = FreeRDPGetBytesPerPixel(format);
+	const size_t rowBytes = 1ull * w * bpp;
+
+	for (UINT32 ty = 0; ty < h; ty++)
+	{
+		const size_t off = 1ull * (y + ty) * stride + 1ull * x * bpp;
+		memcpy(&dst[off], &src[off], rowBytes);
+	}
+}
+
+/* Ensure the per-surface concealment buffers exist and match the surface size. */
+static BOOL gfx_conceal_ensure(gdiGfxSurface* surface)
+{
+	WINPR_ASSERT(surface);
+
+	const size_t dataSize = 1ull * surface->scanline * surface->height;
+	const UINT32 tilesX = (surface->width + GFX_CONCEAL_TILE - 1) / GFX_CONCEAL_TILE;
+	const UINT32 tilesY = (surface->height + GFX_CONCEAL_TILE - 1) / GFX_CONCEAL_TILE;
+	const size_t ageSize = 1ull * tilesX * tilesY;
+
+	if (!surface->prevFrame)
+	{
+		surface->prevFrame = (BYTE*)winpr_aligned_malloc(dataSize, 16);
+		if (!surface->prevFrame)
+			return FALSE;
+		surface->prevFrameValid = FALSE;
+	}
+
+	if (!surface->concealAge)
+	{
+		surface->concealAge = (BYTE*)calloc(1, ageSize);
+		if (!surface->concealAge)
+			return FALSE;
+	}
+
+	return TRUE;
+}
+
+/*
+ * Inspect the decoded region(s) and restore last-good content for tiles that
+ * just turned suspiciously, fully black. Must be called while holding the gfx
+ * context lock and before the surface content is presented.
+ */
+static void gfx_conceal_black_blocks(rdpGdi* gdi, gdiGfxSurface* surface,
+                                     const RECTANGLE_16* rects, UINT32 nrRects)
+{
+	if (!gdi || !gdi->context || !gdi->context->settings)
+		return;
+
+	if (!freerdp_settings_get_bool(gdi->context->settings, FreeRDP_GfxConcealBlackBlocks))
+		return;
+
+	if (!surface || !surface->data || !rects || (nrRects == 0))
+		return;
+
+	if (!gfx_conceal_ensure(surface))
+		return;
+
+	/* First frame for this surface: establish a full reference snapshot and
+	 * present the content as-is (we have nothing to compare against yet). This
+	 * guarantees prevFrame is fully initialized before any per-tile compare. */
+	if (!surface->prevFrameValid)
+	{
+		memcpy(surface->prevFrame, surface->data, 1ull * surface->scanline * surface->height);
+		surface->prevFrameValid = TRUE;
+		return;
+	}
+
+	const UINT32 tilesX = (surface->width + GFX_CONCEAL_TILE - 1) / GFX_CONCEAL_TILE;
+
+	for (UINT32 r = 0; r < nrRects; r++)
+	{
+		const RECTANGLE_16* rect = &rects[r];
+		const UINT32 left = MIN((UINT32)rect->left, surface->width);
+		const UINT32 top = MIN((UINT32)rect->top, surface->height);
+		const UINT32 right = MIN((UINT32)rect->right, surface->width);
+		const UINT32 bottom = MIN((UINT32)rect->bottom, surface->height);
+
+		if ((right <= left) || (bottom <= top))
+			continue;
+
+		for (UINT32 ty = top - (top % GFX_CONCEAL_TILE); ty < bottom; ty += GFX_CONCEAL_TILE)
+		{
+			const UINT32 th = MIN(GFX_CONCEAL_TILE, surface->height - ty);
+			for (UINT32 tx = left - (left % GFX_CONCEAL_TILE); tx < right; tx += GFX_CONCEAL_TILE)
+			{
+				const UINT32 tw = MIN(GFX_CONCEAL_TILE, surface->width - tx);
+				const UINT32 ageIdx = (ty / GFX_CONCEAL_TILE) * tilesX + (tx / GFX_CONCEAL_TILE);
+
+				const BOOL nowBlack = gfx_tile_is_pure_black(surface->data, surface->scanline,
+				                                             surface->format, tx, ty, tw, th);
+				const BOOL wasBlack = gfx_tile_is_pure_black(surface->prevFrame, surface->scanline,
+				                                             surface->format, tx, ty, tw, th);
+
+				if (nowBlack && !wasBlack && surface->concealAge[ageIdx] < GFX_CONCEAL_MAX_AGE)
+				{
+					/* Likely encoder corruption: keep showing the last good
+					 * content for this tile and remember we concealed it. The
+					 * good pixels are already in prevFrame, so leave it intact. */
+					gfx_copy_tile(surface->data, surface->prevFrame, surface->scanline,
+					              surface->format, tx, ty, tw, th);
+					surface->concealAge[ageIdx] = (BYTE)(surface->concealAge[ageIdx] + 1);
+					continue;
+				}
+
+				/* The server delivered usable content (or the region is
+				 * legitimately black long enough): stop concealing and snapshot
+				 * this tile as the reference for the next frame. Only changed
+				 * tiles are copied, so cost scales with the update size. */
+				surface->concealAge[ageIdx] = 0;
+				gfx_copy_tile(surface->prevFrame, surface->data, surface->scanline, surface->format,
+				              tx, ty, tw, th);
+			}
+		}
+	}
+}
+#endif /* WITH_GFX_H264 */
+
 /**
  * Function description
  *
@@ -734,6 +916,8 @@ static UINT gdi_SurfaceCommand_AVC420(rdpGdi* gdi, RdpgfxClientContext* context,
 		WLog_WARN(TAG, "avc420_decompress failure: %" PRId32 ", ignoring update.", rc);
 		return CHANNEL_RC_OK;
 	}
+
+	gfx_conceal_black_blocks(gdi, surface, meta->regionRects, meta->numRegionRects);
 
 	for (UINT32 i = 0; i < meta->numRegionRects; i++)
 	{
@@ -827,6 +1011,8 @@ static UINT gdi_SurfaceCommand_AVC444(rdpGdi* gdi, RdpgfxClientContext* context,
 		WLog_WARN(TAG, "avc444_decompress failure: %" PRId32 ", ignoring update.", rc);
 		return CHANNEL_RC_OK;
 	}
+
+	gfx_conceal_black_blocks(gdi, surface, meta1->regionRects, meta1->numRegionRects);
 
 	for (UINT32 i = 0; i < meta1->numRegionRects; i++)
 	{
@@ -1347,6 +1533,8 @@ static UINT gdi_DeleteSurface(RdpgfxClientContext* context,
 
 #ifdef WITH_GFX_H264
 		h264_context_free(surface->h264);
+		winpr_aligned_free(surface->prevFrame);
+		free(surface->concealAge);
 #endif
 #if defined(WITH_GFX_AV1)
 		freerdp_av1_context_free(surface->av1);

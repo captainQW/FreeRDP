@@ -173,6 +173,7 @@
 		"FreeRDP_GfxSendQoeAck": false,
 		"FreeRDP_GfxAVC444v2": false,
 		"FreeRDP_GfxPlanar": true,
+		"FreeRDP_GfxConcealBlackBlocks": false,
 		"FreeRDP_GfxSuspendFrameAck": false,
 		"FreeRDP_DrawNineGridEnabled": false,
 		"FreeRDP_DrawGdiPlusEnabled": false,
