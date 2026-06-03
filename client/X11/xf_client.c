@@ -105,6 +105,7 @@
 #include "xf_client.h"
 #include "xfreerdp.h"
 #include "xf_utils.h"
+#include "xf_splash.h"
 
 #include <freerdp/log.h>
 #define TAG CLIENT_TAG("x11")
@@ -1416,6 +1417,19 @@ static BOOL xf_post_connect(freerdp* instance)
 	if (!xf_create_window(xfc))
 		return FALSE;
 
+	/* In RemoteApp mode show a launch splash ("Opening application ...") so the
+	 * user gets immediate feedback while the server starts the application. The
+	 * Windows desktop/session UI is never shown; the splash is replaced by the
+	 * real application window as soon as it appears (see xf_rail.c). */
+	if (xfc->remote_app)
+	{
+		const char* app =
+		    freerdp_settings_get_string(settings, FreeRDP_RemoteApplicationName);
+		if (!app || (strnlen(app, 1) == 0))
+			app = freerdp_settings_get_string(settings, FreeRDP_RemoteApplicationProgram);
+		xf_splash_show(xfc, app);
+	}
+
 	if (!xf_get_pixmap_info(xfc))
 		return FALSE;
 
@@ -1499,6 +1513,9 @@ static void xf_post_disconnect(freerdp* instance)
 	                                   xf_OnChannelConnectedEventHandler);
 	PubSub_UnsubscribeChannelDisconnected(instance->context->pubSub,
 	                                      xf_OnChannelDisconnectedEventHandler);
+	/* Drop the RemoteApp launch splash if it is still up (e.g. disconnected
+	 * before the application window was ever shown). */
+	xf_splash_hide(xfc);
 	gdi_free(instance);
 
 	if (xfc->pipethread)

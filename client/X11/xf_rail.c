@@ -33,6 +33,7 @@
 #include "xf_window.h"
 #include "xf_rail.h"
 #include "xf_utils.h"
+#include "xf_splash.h"
 
 #include <freerdp/log.h>
 #define TAG CLIENT_TAG("x11")
@@ -449,6 +450,11 @@ static BOOL xf_rail_window_common(rdpContext* context, const WINDOW_ORDER_INFO* 
 			goto fail;
 
 		xf_AppWindowInit(xfc, appWindow);
+
+		/* The remote application window has appeared: dismiss the launch splash
+		 * ("Opening application ...") that was shown while the server started
+		 * the app. From here on the user interacts with the real window only. */
+		xf_splash_hide(xfc);
 	}
 
 	if (!appWindow)
@@ -1077,6 +1083,9 @@ static UINT xf_rail_server_execute_result(RailClientContext* context,
 		WLog_ERR(TAG, "RAIL exec error: execResult=%s [0x%08" PRIx32 "] NtError=0x%X\n",
 		         error_code2str(execResult->execResult), execResult->execResult,
 		         execResult->rawResult);
+		/* Launch failed: remove the "Opening application ..." splash before
+		 * aborting so the user is not left looking at a stale splash. */
+		xf_splash_hide(xfc);
 		freerdp_abort_connect_context(&xfc->common.context);
 	}
 
@@ -1326,6 +1335,9 @@ fail:
 int xf_rail_uninit(xfContext* xfc, RailClientContext* rail)
 {
 	WINPR_UNUSED(rail);
+
+	/* Make sure no launch splash is left behind if we tear down RAIL. */
+	xf_splash_hide(xfc);
 
 	if (xfc->rail)
 	{

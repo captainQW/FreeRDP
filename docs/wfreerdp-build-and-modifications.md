@@ -40,6 +40,7 @@ Windows 客户端的 GFX 管线与 RAIL（RemoteApp）功能，使其向 Linux/X
 | GFX 管线接入 | `client/Windows/wf_channels.c`、`wf_client.h`、`wf_graphics.c/.h` | 显式处理 `RDPGFX_DVC_CHANNEL_NAME` |
 | RAIL 错误处理 | `client/Windows/wf_rail.c` | exec-result 失败时中止连接 |
 | RAIL min/max | `client/Windows/wf_rail.c` | 通过 `WM_GETMINMAXINFO` 强制服务器下发的窗口尺寸约束 |
+| RAIL 启动体验(Linux) | `client/X11/xf_splash.c/.h`、`xf_client.c`、`xf_rail.c`、`xf_event.c`、`xfreerdp.h` | RemoteApp 去登录界面 + “正在打开应用 xxx”加载提示 |
 | 编译兼容性 | `winpr/include/winpr/wtypes.h` | 修复 MinGW 下 `SSIZE_T` 重定义冲突 |
 
 > Git 历史中，黑块隐藏 + setting + 命令行的改动已作为提交 `1.0.1` 落库；
@@ -194,6 +195,34 @@ wfreerdp.exe /v:HOST:PORT /u:USER /gfx:AVC444,conceal-black /f
   窗口并保存这些约束、置 `hasMinMax = TRUE`。
 - 在 `wf_RailWndProc` 新增 `WM_GETMINMAXINFO` 分支，把服务器下发的约束写入 `MINMAXINFO`，
   让 RemoteApp 原生窗口遵循远端应用的最小/最大尺寸（对齐 X11 对 `RAIL_MINMAXINFO` 的处理）。
+
+### 5.3 Linux/X11 RemoteApp 启动体验：去登录界面 + “正在打开应用”加载提示
+
+针对 Linux（X11 客户端）的 RemoteApp 启动流程做了体验优化，目标是：**不显示 Windows
+登录/桌面会话界面**，打开 RemoteApp 时**先弹出“正在打开应用 xxx”提示**，等服务端响应
+应用窗口就绪后，**直接切换到真正的应用窗口**。
+
+实现（新增 `client/X11/xf_splash.c` / `xf_splash.h`）：
+
+- 新增一个轻量的 **splash 窗口**：居中、无边框（`override_redirect`）、不依赖窗口管理器，
+  用 `XFontSet` + `Xutf8DrawString` 渲染中文文案（"正在打开应用 <名称>"），支持 Expose 重绘。
+- `xfContext` 新增 `xfSplash* splash` 字段（见 `client/X11/xfreerdp.h`）。
+- 启动时机：`xf_post_connect`（`client/X11/xf_client.c`）在 RemoteApp 模式下创建窗口后，
+  立即调用 `xf_splash_show()`，应用名取 `FreeRDP_RemoteApplicationName`，缺省回退到
+  `FreeRDP_RemoteApplicationProgram`。RemoteApp 模式本身已经 `suppressOutput` 并使用
+  dummy window，因此 Windows 桌面/登录画面不会被绘制出来。
+- 关闭时机：
+  - 第一个真实 RAIL 窗口出现时（`xf_rail_window_common` 处理 `WINDOW_ORDER_STATE_NEW`
+    并 `xf_AppWindowInit` 后）调用 `xf_splash_hide()`，无缝切到应用窗口。
+  - 启动失败时（`xf_rail_server_execute_result` 收到非 `RAIL_EXEC_S_OK`）先 `xf_splash_hide()`
+    再中止连接，避免停留在过期的提示上。
+  - `xf_rail_uninit` 与 `xf_post_disconnect` 作为兜底，确保 splash 不会残留。
+- 事件处理：`xf_event_process`（`client/X11/xf_event.c`）在最前面识别 splash 窗口的
+  Expose 事件并交给 `xf_splash_handle_expose()` 重绘，其余事件不受影响。
+- 构建：`client/X11/CMakeLists.txt` 已把 `xf_splash.c/.h` 加入 `SRCS`。
+
+> 说明：这是 X11 窗口系统相关的实现，在本 Windows 环境无法编译验证（无 X11 头文件）。
+> 代码已按 X11 客户端既有约定（`LogDynAndX*` 封装、`nullptr`、`_snprintf`、`XFontSet`）编写。
 
 ---
 

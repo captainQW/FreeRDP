@@ -114,6 +114,10 @@ struct xf_glyph
 };
 typedef struct xf_glyph xfGlyph;
 
+/* RemoteApp launch splash ("Opening application ...") shown while waiting for
+ * the server to start the remote application. Defined in xf_splash.c. */
+typedef struct xf_splash xfSplash;
+
 /* Number of buttons that are mapped from X11 to RDP button events. */
 #define NUM_BUTTONS_MAPPED 11
 
@@ -289,6 +293,10 @@ struct xf_context
 	RailClientContext* rail;
 	wHashTable* railWindows;
 	xfRailIconCache* railIconCache;
+
+	/* RemoteApp launch splash ("Opening application ...") shown between the RDP
+	 * connection completing and the first remote application window appearing. */
+	xfSplash* splash;
 
 #if defined(WITH_VERBOSE_WINPR_ASSERT)
 	BOOL isRailWindowsLocked;

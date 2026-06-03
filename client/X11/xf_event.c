@@ -40,6 +40,7 @@
 #include "xf_gfx.h"
 #include "xf_graphics.h"
 #include "xf_utils.h"
+#include "xf_splash.h"
 
 #include "xf_debug.h"
 #include "xf_event.h"
@@ -1200,6 +1201,15 @@ BOOL xf_event_process(freerdp* instance, const XEvent* event)
 
 	rdpSettings* settings = xfc->common.context.settings;
 	WINPR_ASSERT(settings);
+
+	/* The RemoteApp launch splash is an override-redirect window unknown to the
+	 * RAIL/appWindow bookkeeping; service its Expose events directly. */
+	if (xf_splash_is_window(xfc, event->xany.window))
+	{
+		if (event->type == Expose)
+			xf_splash_handle_expose(xfc);
+		return TRUE;
+	}
 
 	if (xfc->remote_app)
 	{
