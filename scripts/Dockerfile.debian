@@ -1,0 +1,58 @@
+# Build the FreeRDP clients inside a Debian container.
+#
+# Build the image (run from the repository root):
+#   docker build -f scripts/Dockerfile.debian -t freerdp-debian .
+#
+# Copy the built binaries out of the image to ./dist-debian:
+#   docker create --name frdp freerdp-debian
+#   docker cp frdp:/out ./dist-debian
+#   docker rm frdp
+#
+# Or just run the client straight from the container (X11 forwarding):
+#   xhost +local:
+#   docker run --rm -it --net=host -e DISPLAY=$DISPLAY \
+#       -v /tmp/.X11-unix:/tmp/.X11-unix freerdp-debian \
+#       /out/bin/xfreerdp /v:HOST /u:USER /cert:ignore
+FROM debian:bookworm AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Build dependencies (see docs/README.building). libsdl3-dev is not in bookworm,
+# so the SDL2 client is built; the X11 client (with the RemoteApp splash) and
+# Wayland client are built as well.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build pkg-config git ca-certificates \
+        libssl-dev libkrb5-dev libpam0g-dev libicu-dev \
+        libasound2-dev libpulse-dev \
+        libswscale-dev libcairo2-dev \
+        libavcodec-dev libavutil-dev libopenh264-dev \
+        libcjson-dev libpcsclite-dev libusb-1.0-0-dev libfuse3-dev \
+        libcups2-dev libsystemd-dev \
+        libx11-dev libxext-dev libxinerama-dev libxcursor-dev libxdamage-dev \
+        libxv-dev libxkbfile-dev libxrandr-dev libxi-dev libxrender-dev \
+        libxfixes-dev libxtst-dev \
+        libwayland-dev libxkbcommon-dev wayland-protocols \
+        libsdl2-dev libsdl2-ttf-dev \
+        libcbor-dev libfido2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . /src
+
+RUN cmake -GNinja -B /build -S /src \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/out \
+        -DWITH_VERBOSE_WINPR_ASSERT=OFF \
+        -DWITH_CLIENT=ON -DWITH_CLIENT_SDL=ON -DWITH_X11=ON -DWITH_WAYLAND=ON \
+        -DWITH_SERVER=OFF -DWITH_SHADOW=OFF -DWITH_PROXY=OFF -DWITH_SAMPLE=OFF \
+        -DWITH_OPENSSL=ON -DWITH_OPENH264=ON -DWITH_SWSCALE=ON -DWITH_CAIRO=ON \
+        -DWITH_FFMPEG=ON -DWITH_KRB5=ON -DWITH_PULSE=ON -DWITH_ALSA=ON \
+        -DWITH_CUPS=ON -DWITH_FUSE=ON -DWITH_WINPR_TOOLS=ON \
+    && cmake --build /build -j "$(nproc)" \
+    && cmake --install /build
+
+# Final stage: a slim image that only carries the built artifacts.
+FROM debian:bookworm-slim
+COPY --from=build /out /out
+ENV PATH="/out/bin:${PATH}"
+CMD ["/out/bin/xfreerdp", "--version"]

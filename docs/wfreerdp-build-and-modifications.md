@@ -385,6 +385,67 @@ wfreerdp.exe /v:192.168.50.57:19879 /u:USER /gfx:AVC444,conceal-black /f /cert:i
 
 ---
 
+## 10.5 在 Debian / Linux 下编译 FreeRDP 客户端
+
+Windows 客户端 (`wfreerdp`) 之外，本仓库的改动也包含 **Linux/X11 客户端** 的 RemoteApp
+启动体验优化（第 5.3 节）。在 Debian/Ubuntu 上编译 `xfreerdp` / `sdl3-freerdp` 用
+`scripts/build-debian.sh` 一键完成。
+
+### 方式一：直接在 Debian 主机上构建
+
+```bash
+# 1) 安装编译依赖（需要 root）
+sudo ./scripts/build-debian.sh --deps
+
+# 2) 配置 + 编译（产物在 ./build-debian）
+./scripts/build-debian.sh
+
+# 可选：编译并安装到指定前缀
+./scripts/build-debian.sh --install /opt/freerdp
+```
+
+主要依赖（脚本 `APT_PACKAGES` 已涵盖）：`build-essential cmake ninja-build
+pkg-config`、`libssl-dev libkrb5-dev`、`libx11-dev` 及一系列 `libx*-dev`（X11 客户端）、
+`libsdl2-dev`/`libsdl3-dev`（SDL 客户端）、`libopenh264-dev libavcodec-dev`（H.264）、
+`libswscale-dev libcairo2-dev`（缩放）、`libpulse-dev libasound2-dev`（音频）等。
+
+关键 CMake 开关：`-DWITH_CLIENT=ON -DWITH_X11=ON -DWITH_CLIENT_SDL=ON
+-DWITH_WAYLAND=ON -DWITH_SERVER=OFF`，Release 构建并关闭 `WITH_VERBOSE_WINPR_ASSERT`。
+
+产物（位于 `build-debian/client/`）：
+
+- `client/X11/xfreerdp` — X11 客户端，**包含第 5.3 节的 RemoteApp 启动 splash**。
+- `client/SDL/SDL3/sdl3-freerdp`（或 SDL2 的 `sdl-freerdp`）— 官方推荐的 SDL 客户端。
+- `client/Wayland/wlfreerdp` — Wayland 客户端。
+
+运行 X11 RemoteApp（可看到“正在打开应用 xxx”提示）：
+
+```bash
+./build-debian/client/X11/xfreerdp /v:HOST:PORT /u:USER \
+    /app:program:"||APP" /cert:ignore
+```
+
+### 方式二：用 Docker 构建（不污染主机）
+
+`scripts/Dockerfile.debian` 基于 `debian:bookworm`，把依赖安装、配置、编译、安装全部封装：
+
+```bash
+# 在仓库根目录构建镜像
+docker build -f scripts/Dockerfile.debian -t freerdp-debian .
+
+# 取出编译产物到 ./dist-debian
+docker create --name frdp freerdp-debian
+docker cp frdp:/out ./dist-debian
+docker rm frdp
+```
+
+> 说明：本次会话所在的 Windows 主机未开启虚拟化（BIOS/固件中 VT 关闭），WSL2 无法启动，
+> 也没有安装 Docker，**因此 Debian 构建未能在本会话内实地执行验证**。上述脚本按
+> `docs/README.building` 的官方依赖与既有 CI 配置编写，可在任意 Debian/Ubuntu 主机或
+> 容器中直接运行。
+
+---
+
 ## 11. 尚未验证 / 后续事项
 
 - **编译验证**：受工具链/终端限制，TASK 9（GFX 接入 + RAIL 对齐）的改动尚未在本环境完成

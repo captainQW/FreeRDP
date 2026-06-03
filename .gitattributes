@@ -1,3 +1,8 @@
 .gitattributes export-ignore
 .gitignore export-ignore
 .github export-ignore
+
+# Shell scripts must always use LF so they run on Linux even when the repo is
+# checked out on Windows.
+*.sh text eol=lf
+scripts/Dockerfile.debian text eol=lf
