@@ -36,8 +36,18 @@
 #define TAG FREERDP_TAG("gdi")
 
 #ifdef WITH_GFX_H264
-#define GFX_CONCEAL_TILE 16u   /* H.264 macroblock size */
-#define GFX_CONCEAL_MAX_AGE 4u /* present concealed content for at most N frames */
+#define GFX_CONCEAL_TILE 16u /* H.264 macroblock size */
+/* Upper bound (in frames) for how long a black tile that is *surrounded by other
+ * black tiles* is concealed. A genuinely black region (scene change, app closed)
+ * is sustained by the server, so after this many frames we accept it. Isolated
+ * black tiles (surrounded by real content) are treated as encoder corruption and
+ * concealed without this bound. */
+#define GFX_CONCEAL_MAX_AGE 64u
+/* Per colour-channel threshold below which a pixel is considered "black".
+ * Corrupt macroblocks rarely decode to an exact (0,0,0) after YUV->RGB
+ * conversion; allowing a small tolerance catches near-black corruption that
+ * still looks like a solid black block to the user. */
+#define GFX_CONCEAL_BLACK_THRESH 18u
 #endif
 
 static BOOL is_rect_valid(const RECTANGLE_16* rect, size_t width, size_t height)
@@ -709,7 +719,7 @@ fail:
  * ===========================================================================
  */
 #ifdef WITH_GFX_H264
-/* Returns TRUE when every pixel in the rectangle is fully opaque black. */
+/* Returns TRUE when every pixel in the rectangle is (near) opaque black. */
 static BOOL gfx_tile_is_pure_black(const BYTE* data, UINT32 stride, UINT32 format, UINT32 x,
                                    UINT32 y, UINT32 w, UINT32 h)
 {
@@ -722,8 +732,11 @@ static BOOL gfx_tile_is_pure_black(const BYTE* data, UINT32 stride, UINT32 forma
 		{
 			const BYTE* px = &line[1ull * tx * bpp];
 			/* Ignore the alpha byte: only the colour channels matter for the
-			 * "is this pixel black" decision (surfaces are BGRX/BGRA32). */
-			if (px[0] != 0 || px[1] != 0 || px[2] != 0)
+			 * "is this pixel black" decision (surfaces are BGRX/BGRA32). A small
+			 * tolerance treats near-black (encoder corruption after YUV->RGB)
+			 * as black as well. */
+			if ((px[0] > GFX_CONCEAL_BLACK_THRESH) || (px[1] > GFX_CONCEAL_BLACK_THRESH) ||
+			    (px[2] > GFX_CONCEAL_BLACK_THRESH))
 				return FALSE;
 		}
 	}
@@ -773,10 +786,41 @@ static BOOL gfx_conceal_ensure(gdiGfxSurface* surface)
 	return TRUE;
 }
 
+/* Returns the number of in-bounds 4-neighbour tiles that are NOT black in the
+ * current frame. A black tile with at least one non-black neighbour is almost
+ * certainly encoder corruption (real UI does not contain isolated black
+ * macroblocks inside a toolbar/sidebar), whereas a black tile whose neighbours
+ * are all black is most likely part of a genuinely black region. */
+static UINT32 gfx_tile_nonblack_neighbours(const gdiGfxSurface* surface, UINT32 tx, UINT32 ty)
+{
+	UINT32 nonBlack = 0;
+	const int dx[4] = { -(int)GFX_CONCEAL_TILE, (int)GFX_CONCEAL_TILE, 0, 0 };
+	const int dy[4] = { 0, 0, -(int)GFX_CONCEAL_TILE, (int)GFX_CONCEAL_TILE };
+
+	for (int i = 0; i < 4; i++)
+	{
+		const int nx = (int)tx + dx[i];
+		const int ny = (int)ty + dy[i];
+
+		if ((nx < 0) || (ny < 0) || ((UINT32)nx >= surface->width) ||
+		    ((UINT32)ny >= surface->height))
+			continue;
+
+		const UINT32 nw = MIN(GFX_CONCEAL_TILE, surface->width - (UINT32)nx);
+		const UINT32 nh = MIN(GFX_CONCEAL_TILE, surface->height - (UINT32)ny);
+
+		if (!gfx_tile_is_pure_black(surface->data, surface->scanline, surface->format, (UINT32)nx,
+		                            (UINT32)ny, nw, nh))
+			nonBlack++;
+	}
+
+	return nonBlack;
+}
+
 /*
  * Inspect the decoded region(s) and restore last-good content for tiles that
- * just turned suspiciously, fully black. Must be called while holding the gfx
- * context lock and before the surface content is presented.
+ * just turned suspiciously black. Must be called while holding the gfx context
+ * lock and before the surface content is presented.
  */
 static void gfx_conceal_black_blocks(rdpGdi* gdi, gdiGfxSurface* surface,
                                      const RECTANGLE_16* rects, UINT32 nrRects)
@@ -829,21 +873,38 @@ static void gfx_conceal_black_blocks(rdpGdi* gdi, gdiGfxSurface* surface,
 				const BOOL wasBlack = gfx_tile_is_pure_black(surface->prevFrame, surface->scanline,
 				                                             surface->format, tx, ty, tw, th);
 
-				if (nowBlack && !wasBlack && surface->concealAge[ageIdx] < GFX_CONCEAL_MAX_AGE)
+				if (nowBlack && !wasBlack)
 				{
-					/* Likely encoder corruption: keep showing the last good
-					 * content for this tile and remember we concealed it. The
-					 * good pixels are already in prevFrame, so leave it intact. */
-					gfx_copy_tile(surface->data, surface->prevFrame, surface->scanline,
-					              surface->format, tx, ty, tw, th);
-					surface->concealAge[ageIdx] = (BYTE)(surface->concealAge[ageIdx] + 1);
-					continue;
+					/* The tile just turned black while the last good frame had
+					 * real content. Decide whether this is corruption to hide.
+					 *
+					 *  - If the tile is bordered by non-black content it is an
+					 *    isolated black block (classic encoder corruption such
+					 *    as on a toolbar/sidebar) -> conceal it indefinitely.
+					 *  - Otherwise it may be part of a genuinely black region
+					 *    (scene change). Conceal only up to GFX_CONCEAL_MAX_AGE
+					 *    frames, then accept the server content. */
+					const BOOL isolated = (gfx_tile_nonblack_neighbours(surface, tx, ty) > 0);
+
+					if (isolated || (surface->concealAge[ageIdx] < GFX_CONCEAL_MAX_AGE))
+					{
+						/* Keep showing the last good content for this tile. The
+						 * good pixels are already in prevFrame, so leave the
+						 * reference intact and only patch the visible buffer. */
+						gfx_copy_tile(surface->data, surface->prevFrame, surface->scanline,
+						              surface->format, tx, ty, tw, th);
+						if (surface->concealAge[ageIdx] < 0xFF)
+							surface->concealAge[ageIdx] =
+							    (BYTE)(surface->concealAge[ageIdx] + 1);
+						continue;
+					}
 				}
 
-				/* The server delivered usable content (or the region is
-				 * legitimately black long enough): stop concealing and snapshot
-				 * this tile as the reference for the next frame. Only changed
-				 * tiles are copied, so cost scales with the update size. */
+				/* The server delivered usable content (or a black region is
+				 * sustained long enough to be considered legitimate): stop
+				 * concealing and snapshot this tile as the reference for the
+				 * next frame. Only changed tiles are copied, so cost scales with
+				 * the update size. */
 				surface->concealAge[ageIdx] = 0;
 				gfx_copy_tile(surface->prevFrame, surface->data, surface->scanline, surface->format,
 				              tx, ty, tw, th);
