@@ -1,0 +1,26 @@
+﻿commit af850d007bf1212eceb307697454def8f9a2c154
+Author: Your Name <you@example.com>
+Date:   Tue Jun 2 08:16:35 2026 -0700
+
+    1.0.1
+
+ client/common/cmdline.c                            |   9 +
+ client/common/cmdline.h                            |   4 +-
+ client/common/test/default-settings.json           |   1 +
+ client/common/test/rdp-testcases/test1.json        |   1 +
+ .../common/test/rdp-testcases/test1.unchecked.json |   1 +
+ client/common/test/rdp-testcases/test2.json        |   1 +
+ .../common/test/rdp-testcases/test2.unchecked.json |   1 +
+ client/common/test/rdp-testcases/test3.json        |   1 +
+ .../common/test/rdp-testcases/test3.unchecked.json |   1 +
+ client/common/test/testRdpFileUTF16.json           |   1 +
+ client/common/test/testRdpFileUTF16.unchecked.json |   1 +
+ client/common/test/testRdpFileUTF8.json            |   1 +
+ client/common/test/testRdpFileUTF8.unchecked.json  |   1 +
+ include/freerdp/gdi/gfx.h                          |   8 +
+ include/freerdp/settings_types_private.h           |   5 +-
+ libfreerdp/common/settings_getters.c               |   7 +
+ libfreerdp/common/settings_str.h                   |   1 +
+ libfreerdp/core/test/settings_property_lists.h     |   1 +
+ libfreerdp/gdi/gfx.c                               | 188 +++++++++++++++++++++
+ 19 files changed, 231 insertions(+), 3 deletions(-)

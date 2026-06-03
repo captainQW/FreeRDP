@@ -1,0 +1,7 @@
+﻿ client/Windows/wf_channels.c |  10 +++++
+ client/Windows/wf_client.h   |   3 ++
+ client/Windows/wf_graphics.c |  37 ++++++++++++++++
+ client/Windows/wf_graphics.h |   6 +++
+ client/Windows/wf_rail.c     | 102 ++++++++++++++++++++++++++++++++++++++++++-
+ winpr/include/winpr/wtypes.h |  12 +++--
+ 6 files changed, 166 insertions(+), 4 deletions(-)

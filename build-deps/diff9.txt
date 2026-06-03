@@ -1,0 +1,291 @@
+﻿diff --git a/client/Windows/wf_channels.c b/client/Windows/wf_channels.c
+index 65e7154d3..08404e9d4 100644
+--- a/client/Windows/wf_channels.c
++++ b/client/Windows/wf_channels.c
+@@ -24,9 +24,11 @@
+ 
+ #include "wf_rail.h"
+ #include "wf_cliprdr.h"
++#include "wf_graphics.h"
+ 
+ #include <freerdp/gdi/gfx.h>
+ #include <freerdp/gdi/video.h>
++#include <freerdp/client/rdpgfx.h>
+ 
+ #include <freerdp/log.h>
+ #define TAG CLIENT_TAG("windows")
+@@ -46,6 +48,10 @@ void wf_OnChannelConnectedEventHandler(void* context, const ChannelConnectedEven
+ 	{
+ 		wf_rail_init(wfc, (RailClientContext*)e->pInterface);
+ 	}
++	else if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0)
++	{
++		wf_graphics_pipeline_init(wfc, (RdpgfxClientContext*)e->pInterface);
++	}
+ 	else if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0)
+ 	{
+ 		wf_cliprdr_init(wfc, (CliprdrClientContext*)e->pInterface);
+@@ -73,6 +79,10 @@ void wf_OnChannelDisconnectedEventHandler(void* context, const ChannelDisconnect
+ 	{
+ 		wf_rail_uninit(wfc, (RailClientContext*)e->pInterface);
+ 	}
++	else if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0)
++	{
++		wf_graphics_pipeline_uninit(wfc, (RdpgfxClientContext*)e->pInterface);
++	}
+ 	else if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0)
+ 	{
+ 		wf_cliprdr_uninit(wfc, (CliprdrClientContext*)e->pInterface);
+diff --git a/client/Windows/wf_client.h b/client/Windows/wf_client.h
+index 85261765a..9d4e4ea99 100644
+--- a/client/Windows/wf_client.h
++++ b/client/Windows/wf_client.h
+@@ -38,6 +38,7 @@
+ #include <freerdp/codec/color.h>
+ 
+ #include <freerdp/client/rail.h>
++#include <freerdp/client/rdpgfx.h>
+ #include <freerdp/channels/channels.h>
+ #include <freerdp/codec/rfx.h>
+ #include <freerdp/codec/nsc.h>
+@@ -141,6 +142,8 @@ extern "C"
+ 		DispClientContext* disp;
+ 		UINT64 lastSentDate;
+ 		BOOL wasMaximized;
++
++		RdpgfxClientContext* gfx;
+ 	};
+ 
+ 	/**
+diff --git a/client/Windows/wf_graphics.c b/client/Windows/wf_graphics.c
+index 63c84b13c..54aafdd8a 100644
+--- a/client/Windows/wf_graphics.c
++++ b/client/Windows/wf_graphics.c
+@@ -377,3 +377,40 @@ BOOL wf_register_graphics(rdpGraphics* graphics)
+ 	graphics_register_glyph(graphics, &glyph);
+ 	return TRUE;
+ }
++
++void wf_graphics_pipeline_init(wfContext* wfc, RdpgfxClientContext* gfx)
++{
++	rdpGdi* gdi = nullptr;
++	rdpSettings* settings = nullptr;
++
++	WINPR_ASSERT(wfc);
++	WINPR_ASSERT(gfx);
++
++	settings = wfc->common.context.settings;
++	WINPR_ASSERT(settings);
++
++	gdi = wfc->common.context.gdi;
++
++	wfc->gfx = gfx;
++
++	/* The Windows client renders the graphics pipeline through the shared GDI
++	 * backend (the decoded GFX surfaces are blitted into gdi->primary, which is
++	 * the same DIB the WM_PAINT handler copies to the window). Wiring this up is
++	 * what actually enables the RDPGFX channel (AVC420/AVC444/progressive/...)
++	 * for the Windows client. Without it the GFX DVC stays unhandled. */
++	gdi_graphics_pipeline_init(gdi, gfx);
++}
++
++void wf_graphics_pipeline_uninit(wfContext* wfc, RdpgfxClientContext* gfx)
++{
++	rdpGdi* gdi = nullptr;
++
++	WINPR_ASSERT(wfc);
++	WINPR_ASSERT(gfx);
++
++	gdi = wfc->common.context.gdi;
++
++	gdi_graphics_pipeline_uninit(gdi, gfx);
++
++	wfc->gfx = nullptr;
++}
+diff --git a/client/Windows/wf_graphics.h b/client/Windows/wf_graphics.h
+index 241575fd2..fb9a1dbe1 100644
+--- a/client/Windows/wf_graphics.h
++++ b/client/Windows/wf_graphics.h
+@@ -22,6 +22,9 @@
+ 
+ #include "wf_client.h"
+ 
++#include <freerdp/gdi/gfx.h>
++#include <freerdp/client/rdpgfx.h>
++
+ HBITMAP wf_create_dib(wfContext* wfc, UINT32 width, UINT32 height, UINT32 format, const BYTE* data,
+                       BYTE** pdata);
+ wfBitmap* wf_image_new(wfContext* wfc, UINT32 width, UINT32 height, UINT32 format,
+@@ -31,4 +34,7 @@ void wf_image_free(wfBitmap* image);
+ BOOL wf_register_pointer(rdpGraphics* graphics);
+ BOOL wf_register_graphics(rdpGraphics* graphics);
+ 
++void wf_graphics_pipeline_init(wfContext* wfc, RdpgfxClientContext* gfx);
++void wf_graphics_pipeline_uninit(wfContext* wfc, RdpgfxClientContext* gfx);
++
+ #endif /* FREERDP_CLIENT_WIN_GRAPHICS_H */
+diff --git a/client/Windows/wf_rail.c b/client/Windows/wf_rail.c
+index 2f00b76fc..f7c65865c 100644
+--- a/client/Windows/wf_rail.c
++++ b/client/Windows/wf_rail.c
+@@ -45,6 +45,19 @@ struct wf_rail_window
+ 	int width;
+ 	int height;
+ 	char* title;
++
++	/* Server-provided min/max tracking constraints (RAIL_MINMAXINFO_ORDER).
++	 * Enforced via WM_GETMINMAXINFO. hasMinMax stays FALSE until the server
++	 * sends a min/max info PDU for this window. */
++	BOOL hasMinMax;
++	int maxWidth;
++	int maxHeight;
++	int maxPosX;
++	int maxPosY;
++	int minTrackWidth;
++	int minTrackHeight;
++	int maxTrackWidth;
++	int maxTrackHeight;
+ };
+ 
+ /* RemoteApp Core Protocol Extension */
+@@ -395,6 +408,35 @@ LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
+ 		case WM_MOUSEWHEEL:
+ 			break;
+ 
++		case WM_GETMINMAXINFO:
++			/* Enforce server-provided RAIL sizing constraints on the native
++			 * window so RemoteApp windows track the remote app's min/max sizes
++			 * (aligns with how the X11 client applies RAIL_MINMAXINFO). */
++			if (railWindow && railWindow->hasMinMax)
++			{
++				MINMAXINFO* mmi = (MINMAXINFO*)lParam;
++
++				if ((railWindow->maxWidth > 0) && (railWindow->maxHeight > 0))
++				{
++					mmi->ptMaxSize.x = railWindow->maxWidth;
++					mmi->ptMaxSize.y = railWindow->maxHeight;
++				}
++				mmi->ptMaxPosition.x = railWindow->maxPosX;
++				mmi->ptMaxPosition.y = railWindow->maxPosY;
++				if ((railWindow->minTrackWidth > 0) && (railWindow->minTrackHeight > 0))
++				{
++					mmi->ptMinTrackSize.x = railWindow->minTrackWidth;
++					mmi->ptMinTrackSize.y = railWindow->minTrackHeight;
++				}
++				if ((railWindow->maxTrackWidth > 0) && (railWindow->maxTrackHeight > 0))
++				{
++					mmi->ptMaxTrackSize.x = railWindow->maxTrackWidth;
++					mmi->ptMaxTrackSize.y = railWindow->maxTrackHeight;
++				}
++				return 0;
++			}
++			return DefWindowProc(hWnd, msg, wParam, lParam);
++
+ 		case WM_CLOSE:
+ 			DestroyWindow(hWnd);
+ 			break;
+@@ -840,6 +882,26 @@ void wf_rail_register_update_callbacks(rdpUpdate* update)
+ 
+ /* RemoteApp Virtual Channel Extension */
+ 
++static const char* wf_rail_exec_error_code2str(UINT32 code)
++{
++#define EVCASE(x) \
++	case x:       \
++		return #x
++	switch (code)
++	{
++		EVCASE(RAIL_EXEC_S_OK);
++		EVCASE(RAIL_EXEC_E_HOOK_NOT_LOADED);
++		EVCASE(RAIL_EXEC_E_DECODE_FAILED);
++		EVCASE(RAIL_EXEC_E_NOT_IN_ALLOWLIST);
++		EVCASE(RAIL_EXEC_E_FILE_NOT_FOUND);
++		EVCASE(RAIL_EXEC_E_FAIL);
++		EVCASE(RAIL_EXEC_E_SESSION_LOCKED);
++		default:
++			return "RAIL_EXEC_E_UNKNOWN";
++	}
++#undef EVCASE
++}
++
+ /**
+  * Function description
+  *
+@@ -848,7 +910,20 @@ void wf_rail_register_update_callbacks(rdpUpdate* update)
+ static UINT wf_rail_server_execute_result(RailClientContext* context,
+                                           const RAIL_EXEC_RESULT_ORDER* execResult)
+ {
+-	WLog_DBG(TAG, "RailServerExecuteResult: 0x%08X", execResult->rawResult);
++	WINPR_ASSERT(context);
++	WINPR_ASSERT(execResult);
++
++	wfContext* wfc = (wfContext*)context->custom;
++	WINPR_ASSERT(wfc);
++
++	if (execResult->execResult != RAIL_EXEC_S_OK)
++	{
++		WLog_ERR(TAG, "RAIL exec error: execResult=%s [0x%08" PRIx32 "] NtError=0x%X",
++		         wf_rail_exec_error_code2str(execResult->execResult), execResult->execResult,
++		         execResult->rawResult);
++		freerdp_abort_connect_context(&wfc->common.context);
++	}
++
+ 	return CHANNEL_RC_OK;
+ }
+ 
+@@ -904,6 +979,31 @@ static UINT wf_rail_server_local_move_size(RailClientContext* context,
+ static UINT wf_rail_server_min_max_info(RailClientContext* context,
+                                         const RAIL_MINMAXINFO_ORDER* minMaxInfo)
+ {
++	wfRailWindow* railWindow = nullptr;
++
++	WINPR_ASSERT(context);
++	WINPR_ASSERT(minMaxInfo);
++
++	wfContext* wfc = (wfContext*)context->custom;
++	WINPR_ASSERT(wfc);
++
++	railWindow = (wfRailWindow*)HashTable_GetItemValue(wfc->railWindows,
++	                                                   (void*)(UINT_PTR)minMaxInfo->windowId);
++	if (!railWindow)
++		return CHANNEL_RC_OK;
++
++	/* Store the server-provided sizing constraints; they are applied to the
++	 * native window through WM_GETMINMAXINFO (see wf_event.c). */
++	railWindow->hasMinMax = TRUE;
++	railWindow->maxWidth = minMaxInfo->maxWidth;
++	railWindow->maxHeight = minMaxInfo->maxHeight;
++	railWindow->maxPosX = minMaxInfo->maxPosX;
++	railWindow->maxPosY = minMaxInfo->maxPosY;
++	railWindow->minTrackWidth = minMaxInfo->minTrackWidth;
++	railWindow->minTrackHeight = minMaxInfo->minTrackHeight;
++	railWindow->maxTrackWidth = minMaxInfo->maxTrackWidth;
++	railWindow->maxTrackHeight = minMaxInfo->maxTrackHeight;
++
+ 	return CHANNEL_RC_OK;
+ }
+ 
+diff --git a/winpr/include/winpr/wtypes.h b/winpr/include/winpr/wtypes.h
+index 182ae6ad1..495917389 100644
+--- a/winpr/include/winpr/wtypes.h
++++ b/winpr/include/winpr/wtypes.h
+@@ -44,10 +44,16 @@
+ #if defined(_WIN32) || defined(__MINGW32__)
+ #include <wtypes.h>
+ 
+-/* Handle missing ssize_t on Windows */
+-#if defined(WINPR_HAVE_SSIZE_T)
++/* Handle missing ssize_t on Windows.
++ * If the platform SDK headers (BaseTsd.h/wtypes.h) already provide SSIZE_T,
++ * use that definition and do not redefine it. Redefining it to ssize_t can
++ * conflict with the SDK type (e.g. 32-bit MinGW where SSIZE_T is long but
++ * ssize_t is int). */
++#if defined(WINPR_HAVE_WIN_SSIZE_T)
++/* SSIZE_T already provided by the Windows SDK headers */
++#elif defined(WINPR_HAVE_SSIZE_T)
+ typedef ssize_t SSIZE_T;
+-#elif !defined(WINPR_HAVE_WIN_SSIZE_T)
++#else
+ typedef intptr_t SSIZE_T;
+ #endif
+ 

@@ -1,0 +1,10 @@
+﻿af850d007 1.0.1
+359af3eb7 1.0.0
+5ea7306dd Merge pull request #12831 from akallabeth/tidy
+e8ff42d26 [codec,h264] fix unused variable
+1746569a3 [client,sdl] remove duplicate include
+887f73048 Merge pull request #12830 from vmpn/vmpn/rdpsnd-backend-fallback
+350453a56 Merge pull request #12828 from grioghar/fix/rdpgfx-server-frame-cmd-error-code
+5167edd12 Merge pull request #12821 from scottgeigel2/fix/wfreerdp-from-stdin
+5d37dffac Merge pull request #12829 from grioghar/fix/rdpsnd-server-format-divzero
+72c7ef012 [channels,rdpsnd] skip unusable playback backend during selection

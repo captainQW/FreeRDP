@@ -1,0 +1,9 @@
+﻿commit 359af3eb709c1852a095723f52dd168132bb355a
+Author: Your Name <you@example.com>
+Date:   Tue Jun 2 07:19:20 2026 -0700
+
+    1.0.0
+
+ client/Windows/wf_client.c | 55 ++++++++++++++++++++++++++++++++++++----------
+ client/Windows/wf_event.c  |  8 +++++--
+ 2 files changed, 49 insertions(+), 14 deletions(-)

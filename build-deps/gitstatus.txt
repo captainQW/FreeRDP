@@ -1,0 +1,8 @@
+﻿ M client/Windows/wf_channels.c
+ M client/Windows/wf_client.h
+ M client/Windows/wf_graphics.c
+ M client/Windows/wf_graphics.h
+ M client/Windows/wf_rail.c
+ M winpr/include/winpr/wtypes.h
+?? build-deps/
+?? dist/
