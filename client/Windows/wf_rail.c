@@ -45,6 +45,19 @@ struct wf_rail_window
 	int width;
 	int height;
 	char* title;
+
+	/* Server-provided min/max tracking constraints (RAIL_MINMAXINFO_ORDER).
+	 * Enforced via WM_GETMINMAXINFO. hasMinMax stays FALSE until the server
+	 * sends a min/max info PDU for this window. */
+	BOOL hasMinMax;
+	int maxWidth;
+	int maxHeight;
+	int maxPosX;
+	int maxPosY;
+	int minTrackWidth;
+	int minTrackHeight;
+	int maxTrackWidth;
+	int maxTrackHeight;
 };
 
 /* RemoteApp Core Protocol Extension */
@@ -394,6 +407,35 @@ LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 
 		case WM_MOUSEWHEEL:
 			break;
+
+		case WM_GETMINMAXINFO:
+			/* Enforce server-provided RAIL sizing constraints on the native
+			 * window so RemoteApp windows track the remote app's min/max sizes
+			 * (aligns with how the X11 client applies RAIL_MINMAXINFO). */
+			if (railWindow && railWindow->hasMinMax)
+			{
+				MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+
+				if ((railWindow->maxWidth > 0) && (railWindow->maxHeight > 0))
+				{
+					mmi->ptMaxSize.x = railWindow->maxWidth;
+					mmi->ptMaxSize.y = railWindow->maxHeight;
+				}
+				mmi->ptMaxPosition.x = railWindow->maxPosX;
+				mmi->ptMaxPosition.y = railWindow->maxPosY;
+				if ((railWindow->minTrackWidth > 0) && (railWindow->minTrackHeight > 0))
+				{
+					mmi->ptMinTrackSize.x = railWindow->minTrackWidth;
+					mmi->ptMinTrackSize.y = railWindow->minTrackHeight;
+				}
+				if ((railWindow->maxTrackWidth > 0) && (railWindow->maxTrackHeight > 0))
+				{
+					mmi->ptMaxTrackSize.x = railWindow->maxTrackWidth;
+					mmi->ptMaxTrackSize.y = railWindow->maxTrackHeight;
+				}
+				return 0;
+			}
+			return DefWindowProc(hWnd, msg, wParam, lParam);
 
 		case WM_CLOSE:
 			DestroyWindow(hWnd);
@@ -840,6 +882,26 @@ void wf_rail_register_update_callbacks(rdpUpdate* update)
 
 /* RemoteApp Virtual Channel Extension */
 
+static const char* wf_rail_exec_error_code2str(UINT32 code)
+{
+#define EVCASE(x) \
+	case x:       \
+		return #x
+	switch (code)
+	{
+		EVCASE(RAIL_EXEC_S_OK);
+		EVCASE(RAIL_EXEC_E_HOOK_NOT_LOADED);
+		EVCASE(RAIL_EXEC_E_DECODE_FAILED);
+		EVCASE(RAIL_EXEC_E_NOT_IN_ALLOWLIST);
+		EVCASE(RAIL_EXEC_E_FILE_NOT_FOUND);
+		EVCASE(RAIL_EXEC_E_FAIL);
+		EVCASE(RAIL_EXEC_E_SESSION_LOCKED);
+		default:
+			return "RAIL_EXEC_E_UNKNOWN";
+	}
+#undef EVCASE
+}
+
 /**
  * Function description
  *
@@ -848,7 +910,20 @@ void wf_rail_register_update_callbacks(rdpUpdate* update)
 static UINT wf_rail_server_execute_result(RailClientContext* context,
                                           const RAIL_EXEC_RESULT_ORDER* execResult)
 {
-	WLog_DBG(TAG, "RailServerExecuteResult: 0x%08X", execResult->rawResult);
+	WINPR_ASSERT(context);
+	WINPR_ASSERT(execResult);
+
+	wfContext* wfc = (wfContext*)context->custom;
+	WINPR_ASSERT(wfc);
+
+	if (execResult->execResult != RAIL_EXEC_S_OK)
+	{
+		WLog_ERR(TAG, "RAIL exec error: execResult=%s [0x%08" PRIx32 "] NtError=0x%X",
+		         wf_rail_exec_error_code2str(execResult->execResult), execResult->execResult,
+		         execResult->rawResult);
+		freerdp_abort_connect_context(&wfc->common.context);
+	}
+
 	return CHANNEL_RC_OK;
 }
 
@@ -904,6 +979,31 @@ static UINT wf_rail_server_local_move_size(RailClientContext* context,
 static UINT wf_rail_server_min_max_info(RailClientContext* context,
                                         const RAIL_MINMAXINFO_ORDER* minMaxInfo)
 {
+	wfRailWindow* railWindow = nullptr;
+
+	WINPR_ASSERT(context);
+	WINPR_ASSERT(minMaxInfo);
+
+	wfContext* wfc = (wfContext*)context->custom;
+	WINPR_ASSERT(wfc);
+
+	railWindow = (wfRailWindow*)HashTable_GetItemValue(wfc->railWindows,
+	                                                   (void*)(UINT_PTR)minMaxInfo->windowId);
+	if (!railWindow)
+		return CHANNEL_RC_OK;
+
+	/* Store the server-provided sizing constraints; they are applied to the
+	 * native window through WM_GETMINMAXINFO (see wf_event.c). */
+	railWindow->hasMinMax = TRUE;
+	railWindow->maxWidth = minMaxInfo->maxWidth;
+	railWindow->maxHeight = minMaxInfo->maxHeight;
+	railWindow->maxPosX = minMaxInfo->maxPosX;
+	railWindow->maxPosY = minMaxInfo->maxPosY;
+	railWindow->minTrackWidth = minMaxInfo->minTrackWidth;
+	railWindow->minTrackHeight = minMaxInfo->minTrackHeight;
+	railWindow->maxTrackWidth = minMaxInfo->maxTrackWidth;
+	railWindow->maxTrackHeight = minMaxInfo->maxTrackHeight;
+
 	return CHANNEL_RC_OK;
 }
 

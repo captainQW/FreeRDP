@@ -38,6 +38,7 @@
 #include <freerdp/codec/color.h>
 
 #include <freerdp/client/rail.h>
+#include <freerdp/client/rdpgfx.h>
 #include <freerdp/channels/channels.h>
 #include <freerdp/codec/rfx.h>
 #include <freerdp/codec/nsc.h>
@@ -141,6 +142,8 @@ extern "C"
 		DispClientContext* disp;
 		UINT64 lastSentDate;
 		BOOL wasMaximized;
+
+		RdpgfxClientContext* gfx;
 	};
 
 	/**

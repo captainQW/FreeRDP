@@ -44,10 +44,16 @@
 #if defined(_WIN32) || defined(__MINGW32__)
 #include <wtypes.h>
 
-/* Handle missing ssize_t on Windows */
-#if defined(WINPR_HAVE_SSIZE_T)
+/* Handle missing ssize_t on Windows.
+ * If the platform SDK headers (BaseTsd.h/wtypes.h) already provide SSIZE_T,
+ * use that definition and do not redefine it. Redefining it to ssize_t can
+ * conflict with the SDK type (e.g. 32-bit MinGW where SSIZE_T is long but
+ * ssize_t is int). */
+#if defined(WINPR_HAVE_WIN_SSIZE_T)
+/* SSIZE_T already provided by the Windows SDK headers */
+#elif defined(WINPR_HAVE_SSIZE_T)
 typedef ssize_t SSIZE_T;
-#elif !defined(WINPR_HAVE_WIN_SSIZE_T)
+#else
 typedef intptr_t SSIZE_T;
 #endif
 

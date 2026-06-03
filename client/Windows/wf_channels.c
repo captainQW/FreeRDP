@@ -24,9 +24,11 @@
 
 #include "wf_rail.h"
 #include "wf_cliprdr.h"
+#include "wf_graphics.h"
 
 #include <freerdp/gdi/gfx.h>
 #include <freerdp/gdi/video.h>
+#include <freerdp/client/rdpgfx.h>
 
 #include <freerdp/log.h>
 #define TAG CLIENT_TAG("windows")
@@ -45,6 +47,10 @@ void wf_OnChannelConnectedEventHandler(void* context, const ChannelConnectedEven
 	if (strcmp(e->name, RAIL_SVC_CHANNEL_NAME) == 0)
 	{
 		wf_rail_init(wfc, (RailClientContext*)e->pInterface);
+	}
+	else if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0)
+	{
+		wf_graphics_pipeline_init(wfc, (RdpgfxClientContext*)e->pInterface);
 	}
 	else if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0)
 	{
@@ -72,6 +78,10 @@ void wf_OnChannelDisconnectedEventHandler(void* context, const ChannelDisconnect
 	if (strcmp(e->name, RAIL_SVC_CHANNEL_NAME) == 0)
 	{
 		wf_rail_uninit(wfc, (RailClientContext*)e->pInterface);
+	}
+	else if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0)
+	{
+		wf_graphics_pipeline_uninit(wfc, (RdpgfxClientContext*)e->pInterface);
 	}
 	else if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0)
 	{

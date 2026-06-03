@@ -377,3 +377,40 @@ BOOL wf_register_graphics(rdpGraphics* graphics)
 	graphics_register_glyph(graphics, &glyph);
 	return TRUE;
 }
+
+void wf_graphics_pipeline_init(wfContext* wfc, RdpgfxClientContext* gfx)
+{
+	rdpGdi* gdi = nullptr;
+	rdpSettings* settings = nullptr;
+
+	WINPR_ASSERT(wfc);
+	WINPR_ASSERT(gfx);
+
+	settings = wfc->common.context.settings;
+	WINPR_ASSERT(settings);
+
+	gdi = wfc->common.context.gdi;
+
+	wfc->gfx = gfx;
+
+	/* The Windows client renders the graphics pipeline through the shared GDI
+	 * backend (the decoded GFX surfaces are blitted into gdi->primary, which is
+	 * the same DIB the WM_PAINT handler copies to the window). Wiring this up is
+	 * what actually enables the RDPGFX channel (AVC420/AVC444/progressive/...)
+	 * for the Windows client. Without it the GFX DVC stays unhandled. */
+	gdi_graphics_pipeline_init(gdi, gfx);
+}
+
+void wf_graphics_pipeline_uninit(wfContext* wfc, RdpgfxClientContext* gfx)
+{
+	rdpGdi* gdi = nullptr;
+
+	WINPR_ASSERT(wfc);
+	WINPR_ASSERT(gfx);
+
+	gdi = wfc->common.context.gdi;
+
+	gdi_graphics_pipeline_uninit(gdi, gfx);
+
+	wfc->gfx = nullptr;
+}
