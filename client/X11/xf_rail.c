@@ -58,6 +58,35 @@ static const char* error_code2str(UINT32 code)
 #undef EVCASE
 }
 
+/* Human readable hint explaining a RAIL ServerExecuteResult failure and what
+ * the user can do about it. These errors are reported by the server, not the
+ * client (see [MS-RDPERP] 2.2.2.3.2 Server Execute Result PDU). */
+static const char* rail_exec_error_hint(UINT32 code)
+{
+	switch (code)
+	{
+		case RAIL_EXEC_E_NOT_IN_ALLOWLIST:
+			return "the requested RemoteApp is not in the server's published "
+			       "RemoteApp allow list. Publish the application in RemoteApp "
+			       "Manager / set the server policy 'fAllowUnlistedRemotePrograms', "
+			       "or pass the published alias with /app:program:\"||<alias>\" "
+			       "instead of a full executable path.";
+		case RAIL_EXEC_E_FILE_NOT_FOUND:
+			return "the server could not find the requested program. Check the "
+			       "path/alias passed to /app:program.";
+		case RAIL_EXEC_E_HOOK_NOT_LOADED:
+			return "the server side RAIL hook is not loaded (no RemoteApp "
+			       "support active for this session).";
+		case RAIL_EXEC_E_DECODE_FAILED:
+			return "the server failed to decode the execute request.";
+		case RAIL_EXEC_E_SESSION_LOCKED:
+			return "the session is locked; unlock it and retry.";
+		case RAIL_EXEC_E_FAIL:
+		default:
+			return "the server refused to start the RemoteApp.";
+	}
+}
+
 static const char* movetype2str(UINT32 code)
 {
 #define EVCASE(x) \
@@ -1080,9 +1109,11 @@ static UINT xf_rail_server_execute_result(RailClientContext* context,
 
 	if (execResult->execResult != RAIL_EXEC_S_OK)
 	{
-		WLog_ERR(TAG, "RAIL exec error: execResult=%s [0x%08" PRIx32 "] NtError=0x%X\n",
+		WLog_ERR(TAG, "RAIL exec error: execResult=%s [0x%08" PRIx32 "] NtError=0x%X",
 		         error_code2str(execResult->execResult), execResult->execResult,
 		         execResult->rawResult);
+		WLog_ERR(TAG, "RemoteApp launch was rejected by the server: %s",
+		         rail_exec_error_hint(execResult->execResult));
 		/* Launch failed: remove the "Opening application ..." splash before
 		 * aborting so the user is not left looking at a stale splash. */
 		xf_splash_hide(xfc);
