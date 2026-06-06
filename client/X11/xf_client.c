@@ -165,6 +165,63 @@ static int xf_map_error_to_exit_code(DWORD error)
 	return XF_EXIT_CONN_FAILED;
 }
 
+/* Log a human readable, actionable hint for connection failures that are
+ * reported by the server (authentication / account policy results). These are
+ * not client bugs: the server accepted the connection but rejected the
+ * credentials or the account state. Helps users tell "the client is broken"
+ * apart from "fix the account / credentials on the server". */
+static void xf_log_connect_error_hint(DWORD error)
+{
+	const char* hint = nullptr;
+
+	switch (error)
+	{
+		case FREERDP_ERROR_CONNECT_ACCOUNT_DISABLED:
+			hint = "the user account is disabled on the server. Enable the "
+			       "account (Active Directory Users and Computers / 'net user "
+			       "<user> /active:yes') and retry.";
+			break;
+		case FREERDP_ERROR_CONNECT_LOGON_FAILURE:
+			hint = "logon failed: wrong username/password or the domain is "
+			       "missing. Use /u:DOMAIN\\\\user (or /u:user /d:DOMAIN) and "
+			       "verify the credentials.";
+			break;
+		case FREERDP_ERROR_CONNECT_WRONG_PASSWORD:
+			hint = "the password is incorrect.";
+			break;
+		case FREERDP_ERROR_CONNECT_ACCESS_DENIED:
+			hint = "access denied: the account may not be allowed to log on "
+			       "remotely (add it to 'Remote Desktop Users' / check the "
+			       "'Allow log on through Remote Desktop Services' policy).";
+			break;
+		case FREERDP_ERROR_CONNECT_ACCOUNT_RESTRICTION:
+			hint = "an account restriction is preventing logon (e.g. logon "
+			       "hours, workstation restriction or a blank-password policy).";
+			break;
+		case FREERDP_ERROR_CONNECT_ACCOUNT_LOCKED_OUT:
+			hint = "the account is locked out. Unlock it on the server and "
+			       "retry.";
+			break;
+		case FREERDP_ERROR_CONNECT_ACCOUNT_EXPIRED:
+			hint = "the account has expired.";
+			break;
+		case FREERDP_ERROR_CONNECT_PASSWORD_EXPIRED:
+		case FREERDP_ERROR_CONNECT_PASSWORD_MUST_CHANGE:
+			hint = "the password has expired and must be changed on the server "
+			       "before logon.";
+			break;
+		case FREERDP_ERROR_CONNECT_LOGON_TYPE_NOT_GRANTED:
+			hint = "the account is not granted the requested logon type "
+			       "(Remote Desktop logon right missing).";
+			break;
+		default:
+			break;
+	}
+
+	if (hint)
+		WLog_ERR(TAG, "Connection rejected by the server: %s", hint);
+}
+
 static int (*def_error_handler)(Display*, XErrorEvent*);
 static int xf_error_handler_ex(Display* d, XErrorEvent* ev);
 static void xf_check_extensions(xfContext* context);

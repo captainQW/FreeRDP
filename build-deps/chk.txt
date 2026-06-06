@@ -1,2 +1,0 @@
-﻿BUILD_DIR_OK
-GCC_OK
