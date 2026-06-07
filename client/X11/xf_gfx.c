@@ -509,15 +509,22 @@ static UINT xf_UnmapWindowForSurface(RdpgfxClientContext* context, UINT64 window
 	xfContext* xfc = (xfContext*)gdi->context;
 	WINPR_ASSERT(gdi->context);
 
-	if (freerdp_settings_get_bool(gdi->context->settings, FreeRDP_RemoteApplicationMode))
-	{
-		xfAppWindow* appWindow = xf_rail_get_window(xfc, windowID, FALSE);
-		if (appWindow)
-			xf_AppWindowDestroyImage(appWindow);
-		xf_rail_return_window(appWindow, FALSE);
-	}
+	/* Only RemoteApp/RAIL maps surfaces onto (application) windows; in plain
+	 * desktop mode there is nothing window-specific to tear down here. */
+	if (!freerdp_settings_get_bool(gdi->context->settings, FreeRDP_RemoteApplicationMode))
+		return CHANNEL_RC_OK;
 
-	WLog_WARN(TAG, "function not implemented");
+	xfAppWindow* appWindow = xf_rail_get_window(xfc, windowID, FALSE);
+	if (appWindow)
+	{
+		/* Drop the cached XImage/pixmap backing and detach the surface so the
+		 * window is no longer fed from the (now gone) surface. The window
+		 * itself stays alive and is managed by the RAIL window orders. */
+		xf_AppWindowDestroyImage(appWindow);
+		appWindow->surfaceId = 0xFFFFFFFF;
+	}
+	xf_rail_return_window(appWindow, FALSE);
+
 	return CHANNEL_RC_OK;
 }
 

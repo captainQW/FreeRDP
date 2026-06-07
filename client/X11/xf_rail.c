@@ -985,10 +985,8 @@ static BOOL xf_rail_notify_icon_delete(WINPR_ATTR_UNUSED rdpContext* context,
 	return TRUE;
 }
 
-static BOOL
-xf_rail_monitored_desktop(WINPR_ATTR_UNUSED rdpContext* context,
-                          WINPR_ATTR_UNUSED const WINDOW_ORDER_INFO* orderInfo,
-                          WINPR_ATTR_UNUSED const MONITORED_DESKTOP_ORDER* monitoredDesktop)
+static BOOL xf_rail_monitored_desktop(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
+                                      const MONITORED_DESKTOP_ORDER* monitoredDesktop)
 {
 	const UINT32 mask = WINDOW_ORDER_TYPE_DESKTOP | WINDOW_ORDER_FIELD_DESKTOP_HOOKED |
 	                    WINDOW_ORDER_FIELD_DESKTOP_ARC_BEGAN |
@@ -1033,11 +1031,51 @@ xf_rail_monitored_desktop(WINPR_ATTR_UNUSED rdpContext* context,
 	}
 	if (orderInfo->fieldFlags & WINDOW_ORDER_FIELD_DESKTOP_ACTIVE_WND)
 	{
-		WLog_Print(xfc->log, WLOG_WARN, "TODO: implement WINDOW_ORDER_FIELD_DESKTOP_ACTIVE_WND");
+		/* Raise the server's active window locally so keyboard focus / stacking
+		 * follows the remote session. The actual top-to-bottom stacking is done
+		 * via the ZORDER field below (when present). */
+		Window activeHandle = 0;
+		xfAppWindow* active = xf_rail_get_window(xfc, monitoredDesktop->activeWindowId, FALSE);
+		if (active)
+			activeHandle = active->handle;
+		xf_rail_return_window(active, FALSE);
+
+		if (activeHandle != 0)
+		{
+			LogDynAndXRaiseWindow(xfc->log, xfc->display, activeHandle);
+			xf_rail_send_activate(xfc, activeHandle, TRUE);
+		}
 	}
 	if (orderInfo->fieldFlags & WINDOW_ORDER_FIELD_DESKTOP_ZORDER)
 	{
-		WLog_Print(xfc->log, WLOG_WARN, "TODO: implement WINDOW_ORDER_FIELD_DESKTOP_ZORDER");
+		/* The server sends the full window stack in top-to-bottom order, which
+		 * is exactly the order XRestackWindows() expects. Translate each RAIL
+		 * window id to its local X11 window and restack so the local z-order
+		 * matches the remote session. */
+		if ((monitoredDesktop->numWindowIds > 0) && monitoredDesktop->windowIds)
+		{
+			Window* windows =
+			    (Window*)calloc(monitoredDesktop->numWindowIds, sizeof(Window));
+			if (windows)
+			{
+				int nwindows = 0;
+				for (UINT32 i = 0; i < monitoredDesktop->numWindowIds; i++)
+				{
+					xfAppWindow* w =
+					    xf_rail_get_window(xfc, monitoredDesktop->windowIds[i], FALSE);
+					if (w)
+					{
+						windows[nwindows++] = w->handle;
+						xf_rail_return_window(w, FALSE);
+					}
+				}
+
+				if (nwindows > 1)
+					LogDynAndXRestackWindows(xfc->log, xfc->display, windows, nwindows);
+
+				free(windows);
+			}
+		}
 	}
 	if (orderInfo->fieldFlags & ~mask)
 	{
