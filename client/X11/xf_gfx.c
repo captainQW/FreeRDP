@@ -31,6 +31,7 @@
 #include "xf_rail.h"
 #include "xf_utils.h"
 #include "xf_window.h"
+#include "xf_splash.h"
 
 #include <X11/Xutil.h>
 
@@ -188,6 +189,18 @@ static UINT xf_UpdateSurfaces(RdpgfxClientContext* context)
 
 		if (status != CHANNEL_RC_OK)
 			break;
+	}
+
+	/* RemoteApp: while the server is still streaming the session sign-in /
+	 * desktop (no RAIL application window exists yet), keep the launch splash
+	 * on top so that desktop output never becomes visible to the user. The
+	 * splash is dismissed the moment the first RAIL window appears. */
+	if (xfc && xfc->remote_app && xf_splash_active(xfc))
+	{
+		const BOOL haveRailWindow =
+		    (xfc->railWindows != nullptr) && (HashTable_Count(xfc->railWindows) > 0);
+		if (!haveRailWindow)
+			xf_splash_raise(xfc);
 	}
 
 fail:

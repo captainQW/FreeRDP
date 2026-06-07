@@ -224,6 +224,37 @@ wfreerdp.exe /v:HOST:PORT /u:USER /gfx:AVC444,conceal-black /f
 > 说明：这是 X11 窗口系统相关的实现，在本 Windows 环境无法编译验证（无 X11 头文件）。
 > 代码已按 X11 客户端既有约定（`LogDynAndX*` 封装、`nullptr`、`_snprintf`、`XFontSet`）编写。
 
+### 5.4 进一步修复：登录界面泄漏 + RemoteApp 窗口黑边
+
+针对实测中发现的两个问题继续优化：
+
+**(a) 仍会瞬间看到远程会话的“欢迎/登录”界面**
+
+原因：RemoteApp 模式下，服务器在真正进入 RAIL 模式（下发
+`WINDOW_ORDER_FIELD_DESKTOP_ARC_COMPLETED`）之前，会把**会话登录/桌面画面**当作普通
+GFX surface 推送过来，客户端照常绘制，于是 splash 之外露出了登录界面。
+
+修复：在 GFX 每帧刷新入口 `xf_UpdateSurfaces`（`client/X11/xf_gfx.c`）里，当
+`remote_app` 为真、splash 仍在、且 `railWindows` 为空（还没有任何真实应用窗口）时，
+调用新增的 `xf_splash_raise()` 把 splash 重新置顶并重绘，保证登录/桌面画面始终被盖住，
+直到第一个真实 RAIL 窗口出现才 `xf_splash_hide()`。新增 API：`xf_splash_active()`、
+`xf_splash_raise()`（`client/X11/xf_splash.c/.h`）。
+
+**(b) 打开 ZWCAD 等应用时窗口四周是黑边**
+
+原因：RAIL 窗口此前以 `CWBackPixel + background_pixel=0` 创建，即**纯黑背景**。当应用
+顶层窗口比当前已绘制的内容大（启动画面、GFX 尚未铺满、Expose 区域）时，X 服务器会把
+未绘制区域自动填成黑色，形成黑边/黑框。
+
+修复：`client/X11/xf_client.c` 的 `xf_create_window` 在 `remote_app` 分支改用
+`CWBackPixmap + background_pixmap=None`（BackPixmapNone）。这样 X 服务器**不再**用纯色
+背景清除窗口，未绘制像素保持原样，等 GFX 把真实内容 blit 进来即可，黑边消失。该
+`xfc->attribs` 同时被 `xf_AppWindowCreate` 用于创建每个 RAIL 窗口，因此所有 RemoteApp
+窗口都生效；对从不显示的 1x1 dummy window 无副作用。
+
+> 同样地，X11 渲染相关改动无法在本 Windows 环境编译/可视验证，需在 Debian 实机或容器中
+> 复测确认。
+
 ---
 
 ## 6. winpr SSIZE_T 兼容性修复

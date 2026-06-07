@@ -58,6 +58,18 @@ void xf_splash_hide(xfContext* xfc);
 BOOL xf_splash_is_window(xfContext* xfc, Window window);
 
 /**
+ * Returns TRUE if a launch splash is currently shown.
+ */
+BOOL xf_splash_active(xfContext* xfc);
+
+/**
+ * Keep the splash mapped and on top. Call this while RemoteApp output is being
+ * received but no real application window exists yet, so the remote session
+ * sign-in / desktop is never revealed behind the splash.
+ */
+void xf_splash_raise(xfContext* xfc);
+
+/**
  * Repaint the splash content. Call this from the Expose event handler when
  * xf_splash_is_window() matched the exposed window.
  */

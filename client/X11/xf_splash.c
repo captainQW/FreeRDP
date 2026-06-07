@@ -245,6 +245,23 @@ BOOL xf_splash_is_window(xfContext* xfc, Window window)
 	return xfc->splash->handle == window;
 }
 
+BOOL xf_splash_active(xfContext* xfc)
+{
+	return (xfc != nullptr) && (xfc->splash != nullptr);
+}
+
+void xf_splash_raise(xfContext* xfc)
+{
+	if (!xfc || !xfc->splash || !xfc->splash->handle)
+		return;
+
+	/* Keep the splash mapped and on top so the remote session sign-in / desktop
+	 * never becomes visible before the real application window appears. */
+	LogDynAndXMapWindow(xfc->log, xfc->display, xfc->splash->handle);
+	LogDynAndXRaiseWindow(xfc->log, xfc->display, xfc->splash->handle);
+	xf_splash_draw(xfc);
+}
+
 void xf_splash_handle_expose(xfContext* xfc)
 {
 	xf_splash_draw(xfc);

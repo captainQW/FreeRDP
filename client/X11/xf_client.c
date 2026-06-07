@@ -762,7 +762,16 @@ BOOL xf_create_window(xfContext* xfc)
 
 		xfc->attribs.bit_gravity = NorthWestGravity;
 		xfc->attribs.win_gravity = NorthWestGravity;
-		xfc->attribs_mask = CWBackPixel | CWBackingStore | CWOverrideRedirect | CWColormap |
+		/* Use BackPixmapNone for RAIL windows: the X server must NOT auto-clear
+		 * the window to a solid background colour when areas are exposed or the
+		 * window is larger than the content painted so far. With a solid (black)
+		 * background, any not-yet-painted margin of a RemoteApp window - e.g. an
+		 * application splash that is smaller than its top-level window, or the
+		 * brief gap before GFX fills the surface - is shown as an ugly black
+		 * frame. BackPixmapNone leaves those pixels untouched until the real
+		 * content is blitted in, removing the black borders. */
+		xfc->attribs.background_pixmap = None;
+		xfc->attribs_mask = CWBackPixmap | CWBackingStore | CWOverrideRedirect | CWColormap |
 		                    CWBorderPixel | CWWinGravity | CWBitGravity;
 
 		xfc->drawable = xf_CreateDummyWindow(xfc);
