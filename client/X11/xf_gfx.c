@@ -55,6 +55,21 @@ static UINT xf_OutputUpdate(xfContext* xfc, xfGfxSurface* surface)
 	rdpSettings* settings = xfc->common.context.settings;
 	WINPR_ASSERT(settings);
 
+	/* RemoteApp/RAIL: an "output mapped" surface is the whole remote *desktop*
+	 * (e.g. the session sign-in screen, the "正在锁定 / Locking" screen, or the
+	 * bare desktop). A pure RemoteApp client must never show that - only the
+	 * per-application RAIL windows ("window mapped" surfaces) are presented.
+	 * Skip painting the desktop entirely and keep the launch splash on top so
+	 * the user sees the "Opening application ..." hint instead of the remote
+	 * desktop / lock screen. */
+	if (xfc->remote_app)
+	{
+		region16_clear(&surface->gdi.invalidRegion);
+		if (xf_splash_active(xfc))
+			xf_splash_raise(xfc);
+		return CHANNEL_RC_OK;
+	}
+
 	surfaceX = surface->gdi.outputOriginX;
 	surfaceY = surface->gdi.outputOriginY;
 	surfaceRect.left = 0;
@@ -185,7 +200,14 @@ static UINT xf_UpdateSurfaces(RdpgfxClientContext* context)
 		if (surface->gdi.outputMapped)
 			status = xf_OutputUpdate(xfc, surface);
 		else if (surface->gdi.windowMapped)
+		{
 			status = xf_WindowUpdate(context, surface);
+			/* A real RAIL application window received content: the app is
+			 * visible again (initial launch finished, or the session was
+			 * unlocked), so dismiss the launch splash. */
+			if (xfc && xfc->remote_app && xf_splash_active(xfc))
+				xf_splash_hide(xfc);
+		}
 
 		if (status != CHANNEL_RC_OK)
 			break;
@@ -194,7 +216,7 @@ static UINT xf_UpdateSurfaces(RdpgfxClientContext* context)
 	/* RemoteApp: while the server is still streaming the session sign-in /
 	 * desktop (no RAIL application window exists yet), keep the launch splash
 	 * on top so that desktop output never becomes visible to the user. The
-	 * splash is dismissed the moment the first RAIL window appears. */
+	 * splash is dismissed the moment a RAIL window is painted (see above). */
 	if (xfc && xfc->remote_app && xf_splash_active(xfc))
 	{
 		const BOOL haveRailWindow =

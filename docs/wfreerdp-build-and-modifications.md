@@ -255,6 +255,28 @@ GFX surface 推送过来，客户端照常绘制，于是 splash 之外露出了
 > 同样地，X11 渲染相关改动无法在本 Windows 环境编译/可视验证，需在 Debian 实机或容器中
 > 复测确认。
 
+### 5.5 进一步修复：会话锁屏（“正在锁定”）泄漏
+
+实测发现：应用运行中或启动时，远程会话的**锁屏画面（“正在锁定 / Locking”，蓝底）**会
+泄漏出来——既会全屏显示（带黑色信箱边），也会糊在应用（如 SOLIDWORKS）的 RAIL 窗口里。
+
+根因有两处：
+1. 锁屏画面是一张 **“output mapped”整桌面 surface**。RemoteApp 客户端本不该绘制整桌面，
+   但 `xf_OutputUpdate` 之前照画不误，于是锁屏全屏显示。
+2. 会话锁定时服务器会下发 **non-monitored-desktop** order，`xf_rail_non_monitored_desktop`
+   之前直接 `xf_rail_disable_remoteapp_mode`，退出 RAIL 模式并重建整桌面窗口 → 锁屏带黑边
+   全屏出现。
+
+修复（`client/X11/xf_gfx.c`、`xf_rail.c`、`xf_splash.c`）：
+- `xf_OutputUpdate`：`remote_app` 模式下**直接跳过整桌面 surface 的绘制**，清掉 invalid
+  region，并把 splash 置顶。纯 RemoteApp 只呈现 “window mapped” 的应用窗口，绝不画桌面/锁屏。
+- `xf_rail_non_monitored_desktop`：当 `RemoteApplicationMode` 为真时**不再退出 RAIL 模式**，
+  改为重新 `xf_splash_show()`（显示“正在打开应用…”），避免重建整桌面窗口暴露锁屏。
+- `xf_UpdateSurfaces`：当某个 “window mapped” 应用窗口被真正绘制时（启动完成或解锁恢复），
+  调用 `xf_splash_hide()` 收起 splash，无缝回到应用。
+- `xf_splash_show` 的“已存在”分支改为 `xf_splash_raise()`（重新置顶并重绘），保证锁屏期间
+  splash 能盖在 RAIL 窗口之上。
+
 ---
 
 ## 6. winpr SSIZE_T 兼容性修复

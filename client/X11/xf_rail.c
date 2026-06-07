@@ -1069,6 +1069,24 @@ static BOOL xf_rail_non_monitored_desktop(rdpContext* context,
 		WLog_Print(xfc->log, WLOG_WARN, "unknown flags 0x%08" PRIx32 "!", orderInfo->fieldFlags);
 	}
 
+	/* A dedicated RemoteApp session must stay in RAIL mode for its whole
+	 * lifetime. The server emits a non-monitored-desktop order in transient
+	 * situations (e.g. the session is locking -> the "正在锁定 / Locking"
+	 * screen, UAC secure desktop, ...). Leaving RAIL mode here recreates the
+	 * full desktop window and shows that desktop/lock screen (with black
+	 * letterbox bars) instead of the application. Keep RAIL mode and bring the
+	 * launch splash back so the user sees the "Opening application ..." hint
+	 * rather than the remote desktop. */
+	if (freerdp_settings_get_bool(context->settings, FreeRDP_RemoteApplicationMode))
+	{
+		const char* app =
+		    freerdp_settings_get_string(context->settings, FreeRDP_RemoteApplicationName);
+		if (!app || (strnlen(app, 1) == 0))
+			app = freerdp_settings_get_string(context->settings, FreeRDP_RemoteApplicationProgram);
+		xf_splash_show(xfc, app);
+		return TRUE;
+	}
+
 	return xf_rail_disable_remoteapp_mode(xfc);
 }
 

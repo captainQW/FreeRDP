@@ -140,7 +140,7 @@ BOOL xf_splash_show(xfContext* xfc, const char* appName)
 	if (!xfc->display || !xfc->screen)
 		return FALSE;
 
-	/* Already showing: just refresh the message. */
+	/* Already showing: refresh the message and make sure it is on top. */
 	if (xfc->splash)
 	{
 		char* msg = xf_splash_format_message(appName);
@@ -149,7 +149,7 @@ BOOL xf_splash_show(xfContext* xfc, const char* appName)
 			free(xfc->splash->message);
 			xfc->splash->message = msg;
 		}
-		xf_splash_draw(xfc);
+		xf_splash_raise(xfc);
 		return TRUE;
 	}
 
