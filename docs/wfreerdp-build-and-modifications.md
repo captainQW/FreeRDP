@@ -277,6 +277,15 @@ GFX surface 推送过来，客户端照常绘制，于是 splash 之外露出了
 - `xf_splash_show` 的“已存在”分支改为 `xf_splash_raise()`（重新置顶并重绘），保证锁屏期间
   splash 能盖在 RAIL 窗口之上。
 
+### 5.6 splash 超时保护（避免永久卡加载）
+
+参考设计文档补上**超时兜底**：splash 创建时记录 `startTime`（`GetTickCount64`），新增
+`xf_splash_check_timeout()`，在每帧 `xf_UpdateSurfaces`“无 RAIL 窗口仍在显示 splash”的
+分支里检查；若超过 `XF_SPLASH_TIMEOUT_MS`（30 秒）仍没有应用窗口出现，就打印告警并
+`xf_splash_hide()`，防止应用启动失败 / 服务器迟迟不进入 RAIL 模式时用户永久卡在加载界面。
+（启动失败本身已由 `xf_rail_server_execute_result` 中止连接并给出可读原因，这里只是最后
+一道保险。）
+
 ---
 
 ## 6. winpr SSIZE_T 兼容性修复

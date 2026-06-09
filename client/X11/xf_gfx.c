@@ -216,13 +216,17 @@ static UINT xf_UpdateSurfaces(RdpgfxClientContext* context)
 	/* RemoteApp: while the server is still streaming the session sign-in /
 	 * desktop (no RAIL application window exists yet), keep the launch splash
 	 * on top so that desktop output never becomes visible to the user. The
-	 * splash is dismissed the moment a RAIL window is painted (see above). */
+	 * splash is dismissed the moment a RAIL window is painted (see above). A
+	 * timeout guards against the app never creating a window. */
 	if (xfc && xfc->remote_app && xf_splash_active(xfc))
 	{
 		const BOOL haveRailWindow =
 		    (xfc->railWindows != nullptr) && (HashTable_Count(xfc->railWindows) > 0);
 		if (!haveRailWindow)
-			xf_splash_raise(xfc);
+		{
+			if (!xf_splash_check_timeout(xfc))
+				xf_splash_raise(xfc);
+		}
 	}
 
 fail:

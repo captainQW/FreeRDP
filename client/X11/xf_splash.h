@@ -75,4 +75,12 @@ void xf_splash_raise(xfContext* xfc);
  */
 void xf_splash_handle_expose(xfContext* xfc);
 
+/**
+ * Safety net: if the splash has been shown for longer than the internal
+ * timeout without an application window appearing, hide it so the user is not
+ * stuck on the loading screen forever. Returns TRUE if the splash was
+ * dismissed due to timeout.
+ */
+BOOL xf_splash_check_timeout(xfContext* xfc);
+
 #endif /* FREERDP_CLIENT_X11_SPLASH_H */

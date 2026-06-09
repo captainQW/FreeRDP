@@ -27,6 +27,7 @@
 
 #include <winpr/string.h>
 #include <winpr/assert.h>
+#include <winpr/sysinfo.h>
 
 #include <freerdp/settings.h>
 
@@ -40,6 +41,11 @@
 #define XF_SPLASH_WIDTH 420
 #define XF_SPLASH_HEIGHT 120
 #define XF_SPLASH_PAD 24
+/* Safety net: never keep the launch splash up forever. If no RemoteApp window
+ * appears within this many milliseconds, drop the splash so the user is not
+ * stuck on a loading screen (e.g. the app failed to start, or the server never
+ * entered RAIL mode). */
+#define XF_SPLASH_TIMEOUT_MS 30000
 
 struct xf_splash
 {
@@ -52,6 +58,7 @@ struct xf_splash
 	unsigned long fg;
 	unsigned long accent;
 	char* message;
+	UINT64 startTime;
 };
 
 static unsigned long xf_splash_color(xfContext* xfc, const char* rgb)
@@ -163,6 +170,7 @@ BOOL xf_splash_show(xfContext* xfc, const char* appName)
 	splash->bg = xf_splash_color(xfc, "rgb:24/28/30");
 	splash->fg = xf_splash_color(xfc, "rgb:f0/f0/f0");
 	splash->accent = xf_splash_color(xfc, "rgb:3d/8b/fd");
+	splash->startTime = GetTickCount64();
 
 	Window root = RootWindowOfScreen(xfc->screen);
 	const int sw = WidthOfScreen(xfc->screen);
@@ -265,4 +273,21 @@ void xf_splash_raise(xfContext* xfc)
 void xf_splash_handle_expose(xfContext* xfc)
 {
 	xf_splash_draw(xfc);
+}
+
+BOOL xf_splash_check_timeout(xfContext* xfc)
+{
+	if (!xfc || !xfc->splash)
+		return FALSE;
+
+	const UINT64 now = GetTickCount64();
+	if (now - xfc->splash->startTime < XF_SPLASH_TIMEOUT_MS)
+		return FALSE;
+
+	WLog_WARN(TAG,
+	          "RemoteApp launch splash timed out after %u ms without an application window; "
+	          "dismissing it.",
+	          XF_SPLASH_TIMEOUT_MS);
+	xf_splash_hide(xfc);
+	return TRUE;
 }
