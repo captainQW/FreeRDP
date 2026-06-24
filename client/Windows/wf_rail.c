@@ -1488,6 +1488,57 @@ static UINT wf_rail_server_get_appid_response(RailClientContext* context,
 	return CHANNEL_RC_OK;
 }
 
+/**
+ * [MS-RDPERP] 2.2.2.11.1 Server Z-Order Sync Information PDU
+ * (TS_RAIL_ORDER_ZORDER_SYNC). Raise the marker window so the local Z-order
+ * tracks the remote session window stack.
+ *
+ * @return 0 on success, otherwise a Win32 error code
+ */
+static UINT wf_rail_server_zorder_sync(RailClientContext* context, const RAIL_ZORDER_SYNC* zorder)
+{
+	wfRailWindow* railWindow = nullptr;
+
+	WINPR_ASSERT(context);
+	WINPR_ASSERT(zorder);
+
+	wfContext* wfc = (wfContext*)context->custom;
+	WINPR_ASSERT(wfc);
+
+	railWindow = (wfRailWindow*)HashTable_GetItemValue(wfc->railWindows,
+	                                                   (void*)(UINT_PTR)zorder->windowIdMarker);
+	if (railWindow && railWindow->hWnd)
+		SetWindowPos(railWindow->hWnd, HWND_TOP, 0, 0, 0, 0,
+		             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+	return CHANNEL_RC_OK;
+}
+
+/**
+ * [MS-RDPERP] 2.2.2.12.1 Window Cloak State Change PDU (TS_RAIL_ORDER_CLOAK).
+ * Hide (cloak) or show (uncloak) a window so cloaked RemoteApp windows
+ * disappear locally as they do in the remote session.
+ *
+ * @return 0 on success, otherwise a Win32 error code
+ */
+static UINT wf_rail_server_cloak(RailClientContext* context, const RAIL_CLOAK* cloak)
+{
+	wfRailWindow* railWindow = nullptr;
+
+	WINPR_ASSERT(context);
+	WINPR_ASSERT(cloak);
+
+	wfContext* wfc = (wfContext*)context->custom;
+	WINPR_ASSERT(wfc);
+
+	railWindow = (wfRailWindow*)HashTable_GetItemValue(wfc->railWindows,
+	                                                   (void*)(UINT_PTR)cloak->windowId);
+	if (railWindow && railWindow->hWnd)
+		ShowWindow(railWindow->hWnd, cloak->cloak ? SW_HIDE : SW_SHOWNOACTIVATE);
+
+	return CHANNEL_RC_OK;
+}
+
 void wf_rail_invalidate_region(wfContext* wfc, REGION16* invalidRegion)
 {
 	RECT updateRect;
@@ -1540,6 +1591,8 @@ BOOL wf_rail_init(wfContext* wfc, RailClientContext* rail)
 	rail->ServerMinMaxInfo = wf_rail_server_min_max_info;
 	rail->ServerLanguageBarInfo = wf_rail_server_language_bar_info;
 	rail->ServerGetAppIdResponse = wf_rail_server_get_appid_response;
+	rail->ServerZOrderSync = wf_rail_server_zorder_sync;
+	rail->ServerCloak = wf_rail_server_cloak;
 	wf_rail_register_update_callbacks(context->update);
 	wfc->railWindows = HashTable_New(TRUE);
 	if (!wfc->railWindows)
