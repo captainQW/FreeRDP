@@ -140,6 +140,9 @@ extern "C"
 		/* RAIL notification-area (system tray) icons, keyed by
 		 * windowId<<32|notifyIconId, rendered via Shell_NotifyIcon. */
 		wHashTable* railNotifyIcons;
+		/* Number of times the RemoteApp launch (Execute PDU) has been retried
+		 * after a transient RAIL_EXEC_E_HOOK_NOT_LOADED result. */
+		UINT32 railExecRetries;
 		BOOL isConsole;
 
 		DispClientContext* disp;

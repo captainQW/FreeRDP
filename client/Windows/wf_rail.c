@@ -30,6 +30,14 @@
 
 #define TAG CLIENT_TAG("windows")
 
+/* Seamless RemoteApp launch: when the server replies RAIL_EXEC_E_HOOK_NOT_LOADED
+ * the RemoteApp shell hook (rdpshell) was not ready yet. This happens right
+ * after sign-in while the remote session's shell is still initializing. Resend
+ * the launch up to this many times, sleeping this long between attempts, before
+ * giving up. ~30s total is enough for a cold session to finish loading. */
+#define WF_RAIL_EXEC_MAX_RETRIES 30
+#define WF_RAIL_EXEC_RETRY_DELAY_MS 1000
+
 #define GET_X_LPARAM(lParam) ((UINT16)(lParam & 0xFFFF))
 #define GET_Y_LPARAM(lParam) ((UINT16)((lParam >> 16) & 0xFFFF))
 
@@ -1322,7 +1330,30 @@ static UINT wf_rail_server_execute_result(RailClientContext* context,
 		WLog_ERR(TAG, "RAIL exec error: execResult=%s [0x%08" PRIx32 "] NtError=0x%X",
 		         wf_rail_exec_error_code2str(execResult->execResult), execResult->execResult,
 		         execResult->rawResult);
+
+		/* RAIL_EXEC_E_HOOK_NOT_LOADED is a transient race: the server received
+		 * the Execute PDU before its RemoteApp shell hook (rdpshell) finished
+		 * loading. Rather than aborting - which drops the user back to nothing -
+		 * wait briefly and resend the launch command a few times. This is what
+		 * makes the seamless launch reliable instead of intermittently failing
+		 * right after sign-in. */
+		if ((execResult->execResult == RAIL_EXEC_E_HOOK_NOT_LOADED) &&
+		    (wfc->railExecRetries < WF_RAIL_EXEC_MAX_RETRIES))
+		{
+			wfc->railExecRetries++;
+			WLog_WARN(TAG,
+			          "RemoteApp shell hook not loaded yet, retrying launch (%" PRIu32 "/%d)",
+			          wfc->railExecRetries, WF_RAIL_EXEC_MAX_RETRIES);
+			Sleep(WF_RAIL_EXEC_RETRY_DELAY_MS);
+			return client_rail_server_start_cmd(context);
+		}
+
 		freerdp_abort_connect_context(&wfc->common.context);
+	}
+	else
+	{
+		/* Successful launch: reset the retry counter. */
+		wfc->railExecRetries = 0;
 	}
 
 	return CHANNEL_RC_OK;

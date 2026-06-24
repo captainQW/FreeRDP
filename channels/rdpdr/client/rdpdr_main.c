@@ -1862,11 +1862,21 @@ static UINT rdpdr_process_receive(rdpdrPlugin* rdpdr, wStream* s)
 				case PAKID_CORE_USER_LOGGEDON:
 					if (!rdpdr->haveServerCaps)
 					{
-						WLog_Print(rdpdr->log, WLOG_ERROR,
-						           "Wrong state %s for %s. [serverCaps=%d, clientId=%d]",
-						           rdpdr_state_str(rdpdr->state), rdpdr_packetid_string(packetId),
+						/* Some servers (observed with RemoteApp/RAIL sessions)
+						 * send PAKID_CORE_USER_LOGGEDON before the capability
+						 * exchange has completed. Treating this as a fatal error
+						 * tears down the whole connection right as the remote
+						 * application is being launched, which breaks the
+						 * seamless RemoteApp experience. Tolerate the
+						 * out-of-order PDU: warn and continue instead of
+						 * aborting. The device list announce is deferred until
+						 * the capabilities actually arrive. */
+						WLog_Print(rdpdr->log, WLOG_WARN,
+						           "Received %s before server capabilities (state %s); tolerating "
+						           "out-of-order PDU and continuing. [serverCaps=%d, clientId=%d]",
+						           rdpdr_packetid_string(packetId), rdpdr_state_str(rdpdr->state),
 						           rdpdr->haveServerCaps, rdpdr->haveClientId);
-						error = ERROR_INTERNAL_ERROR;
+						error = CHANNEL_RC_OK;
 					}
 					else if ((error = rdpdr_send_device_list_announce_request(rdpdr, TRUE)))
 					{
