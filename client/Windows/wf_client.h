@@ -137,6 +137,9 @@ extern "C"
 
 		RailClientContext* rail;
 		wHashTable* railWindows;
+		/* RAIL notification-area (system tray) icons, keyed by
+		 * windowId<<32|notifyIconId, rendered via Shell_NotifyIcon. */
+		wHashTable* railNotifyIcons;
 		BOOL isConsole;
 
 		DispClientContext* disp;

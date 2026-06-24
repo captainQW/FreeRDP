@@ -24,6 +24,8 @@
 #include <winpr/tchar.h>
 #include <winpr/print.h>
 
+#include <shellapi.h>
+
 #include "wf_rail.h"
 
 #define TAG CLIENT_TAG("windows")
@@ -936,61 +938,304 @@ static BOOL wf_rail_window_cached_icon(rdpContext* context, const WINDOW_ORDER_I
 	return TRUE;
 }
 
-static void wf_rail_notify_icon_common(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
-                                       const NOTIFY_ICON_STATE_ORDER* notifyIconState)
+/* ---- RAIL notification-area icons (system tray) via Shell_NotifyIcon ---- */
+
+#define WF_TRAY_CALLBACK_MSG (WM_APP + 0x40)
+
+typedef struct
 {
-	if (orderInfo->fieldFlags & WINDOW_ORDER_FIELD_NOTIFY_VERSION)
+	wfContext* wfc;
+	UINT32 windowId;
+	UINT32 notifyIconId;
+	HWND hWnd;  /* message-only window receiving the tray callback */
+	HICON hIcon;
+	UINT uID;
+	char tip[128];
+} wfNotifyIcon;
+
+static UINT64 wf_notify_key(UINT32 windowId, UINT32 notifyIconId)
+{
+	return (((UINT64)windowId) << 32) | (UINT64)notifyIconId;
+}
+
+/* Build an HICON from a RAIL ICON_INFO. Returns NULL on failure. */
+static HICON wf_rail_create_hicon(const ICON_INFO* iconInfo)
+{
+	HDC hDC = NULL;
+	HICON hIcon = NULL;
+	ICONINFO ii = { 0 };
+	BITMAPINFO bi = { 0 };
+	BITMAPINFOHEADER* bih = &bi.bmiHeader;
+
+	if (!iconInfo || (iconInfo->width == 0) || (iconInfo->height == 0))
+		return NULL;
+
+	hDC = GetDC(NULL);
+	if (!hDC)
+		return NULL;
+
+	bih->biSize = sizeof(BITMAPINFOHEADER);
+	bih->biWidth = (LONG)iconInfo->width;
+	bih->biHeight = (LONG)iconInfo->height;
+	bih->biPlanes = 1;
+	bih->biBitCount = (WORD)iconInfo->bpp;
+	bih->biCompression = 0;
+
+	ii.fIcon = TRUE;
+	ii.hbmMask = CreateDIBitmap(hDC, bih, CBM_INIT, iconInfo->bitsMask, &bi, DIB_RGB_COLORS);
+	ii.hbmColor = CreateDIBitmap(hDC, bih, CBM_INIT, iconInfo->bitsColor, &bi, DIB_RGB_COLORS);
+	if (ii.hbmMask && ii.hbmColor)
+		hIcon = CreateIconIndirect(&ii);
+
+	if (ii.hbmMask)
+		DeleteObject(ii.hbmMask);
+	if (ii.hbmColor)
+		DeleteObject(ii.hbmColor);
+	ReleaseDC(NULL, hDC);
+	return hIcon;
+}
+
+/* Window procedure for the message-only window that receives tray callbacks.
+ * Forwards user interaction (clicks) to the server as RAIL Notify Event PDUs. */
+static LRESULT CALLBACK wf_NotifyIconProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	wfNotifyIcon* icon = (wfNotifyIcon*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
+
+	if ((msg == WF_TRAY_CALLBACK_MSG) && icon && icon->wfc && icon->wfc->rail)
 	{
+		RAIL_NOTIFY_EVENT_ORDER notify = { 0 };
+		notify.windowId = icon->windowId;
+		notify.notifyIconId = icon->notifyIconId;
+
+		switch (LOWORD(lParam))
+		{
+			case WM_LBUTTONUP:
+				notify.message = WM_LBUTTONUP;
+				icon->wfc->rail->ClientNotifyEvent(icon->wfc->rail, &notify);
+				notify.message = NIN_SELECT;
+				icon->wfc->rail->ClientNotifyEvent(icon->wfc->rail, &notify);
+				return 0;
+			case WM_RBUTTONUP:
+				notify.message = WM_RBUTTONUP;
+				icon->wfc->rail->ClientNotifyEvent(icon->wfc->rail, &notify);
+				return 0;
+			case WM_LBUTTONDBLCLK:
+				notify.message = WM_LBUTTONDBLCLK;
+				icon->wfc->rail->ClientNotifyEvent(icon->wfc->rail, &notify);
+				return 0;
+			default:
+				break;
+		}
+		return 0;
+	}
+
+	return DefWindowProc(hWnd, msg, wParam, lParam);
+}
+
+static void wf_notify_icon_free(void* value)
+{
+	wfNotifyIcon* icon = (wfNotifyIcon*)value;
+	if (!icon)
+		return;
+
+	{
+		NOTIFYICONDATA nid = { 0 };
+		nid.cbSize = sizeof(nid);
+		nid.hWnd = icon->hWnd;
+		nid.uID = icon->uID;
+		Shell_NotifyIcon(NIM_DELETE, &nid);
+	}
+	if (icon->hIcon)
+		DestroyIcon(icon->hIcon);
+	if (icon->hWnd)
+		DestroyWindow(icon->hWnd);
+	free(icon);
+}
+
+static wfNotifyIcon* wf_notify_icon_get(wfContext* wfc, UINT32 windowId, UINT32 notifyIconId)
+{
+	if (!wfc->railNotifyIcons)
+		return NULL;
+	const UINT64 key = wf_notify_key(windowId, notifyIconId);
+	return (wfNotifyIcon*)HashTable_GetItemValue(wfc->railNotifyIcons, (void*)(UINT_PTR)key);
+}
+
+static wfNotifyIcon* wf_notify_icon_new(wfContext* wfc, UINT32 windowId, UINT32 notifyIconId)
+{
+	static UINT s_uidCounter = 1;
+	HINSTANCE hInstance = GetModuleHandle(NULL);
+	WNDCLASSEX wndClassEx = { 0 };
+	wfNotifyIcon* icon = (wfNotifyIcon*)calloc(1, sizeof(wfNotifyIcon));
+
+	if (!icon)
+		return NULL;
+
+	icon->wfc = wfc;
+	icon->windowId = windowId;
+	icon->notifyIconId = notifyIconId;
+	icon->uID = s_uidCounter++;
+
+	wndClassEx.cbSize = sizeof(WNDCLASSEX);
+	wndClassEx.lpfnWndProc = wf_NotifyIconProc;
+	wndClassEx.hInstance = hInstance;
+	wndClassEx.lpszClassName = _T("RdpRailNotifyIcon");
+	RegisterClassEx(&wndClassEx);
+
+	/* Message-only window (HWND_MESSAGE) just to receive the tray callback. */
+	icon->hWnd = CreateWindowEx(0, _T("RdpRailNotifyIcon"), _T(""), 0, 0, 0, 0, 0, HWND_MESSAGE,
+	                            NULL, hInstance, NULL);
+	if (!icon->hWnd)
+	{
+		free(icon);
+		return NULL;
+	}
+	SetWindowLongPtr(icon->hWnd, GWLP_USERDATA, (LONG_PTR)icon);
+
+	const UINT64 key = wf_notify_key(windowId, notifyIconId);
+	if (!HashTable_Insert(wfc->railNotifyIcons, (void*)(UINT_PTR)key, icon))
+	{
+		DestroyWindow(icon->hWnd);
+		free(icon);
+		return NULL;
+	}
+	return icon;
+}
+
+static BOOL wf_rail_notify_icon_common(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
+                                       const NOTIFY_ICON_STATE_ORDER* notifyIconState, BOOL isNew)
+{
+	wfContext* wfc = (wfContext*)context;
+	wfNotifyIcon* icon = NULL;
+	NOTIFYICONDATA nid = { 0 };
+
+	if (!wfc->railNotifyIcons)
+		return TRUE;
+
+	icon = wf_notify_icon_get(wfc, orderInfo->windowId, orderInfo->notifyIconId);
+	if (!icon)
+		icon = wf_notify_icon_new(wfc, orderInfo->windowId, orderInfo->notifyIconId);
+	if (!icon)
+		return FALSE;
+
+	nid.cbSize = sizeof(nid);
+	nid.hWnd = icon->hWnd;
+	nid.uID = icon->uID;
+	nid.uFlags = NIF_MESSAGE;
+	nid.uCallbackMessage = WF_TRAY_CALLBACK_MSG;
+
+	if (orderInfo->fieldFlags & WINDOW_ORDER_ICON)
+	{
+		HICON hIcon = wf_rail_create_hicon(&notifyIconState->icon);
+		if (hIcon)
+		{
+			if (icon->hIcon)
+				DestroyIcon(icon->hIcon);
+			icon->hIcon = hIcon;
+			nid.hIcon = hIcon;
+			nid.uFlags |= NIF_ICON;
+		}
+	}
+	else if (icon->hIcon)
+	{
+		nid.hIcon = icon->hIcon;
+		nid.uFlags |= NIF_ICON;
 	}
 
 	if (orderInfo->fieldFlags & WINDOW_ORDER_FIELD_NOTIFY_TIP)
 	{
+		const WCHAR* str = (const WCHAR*)notifyIconState->toolTip.string;
+		if (notifyIconState->toolTip.length > 0)
+		{
+			char* tip = ConvertWCharNToUtf8Alloc(
+			    str, notifyIconState->toolTip.length / sizeof(WCHAR), NULL);
+			if (tip)
+			{
+				strncpy(icon->tip, tip, sizeof(icon->tip) - 1);
+				free(tip);
+			}
+		}
+	}
+	if (icon->tip[0])
+	{
+		WCHAR* tipW = ConvertUtf8ToWCharAlloc(icon->tip, NULL);
+		if (tipW)
+		{
+			wcsncpy(nid.szTip, tipW, ARRAYSIZE(nid.szTip) - 1);
+			free(tipW);
+			nid.uFlags |= NIF_TIP;
+		}
 	}
 
+	Shell_NotifyIcon(isNew ? NIM_ADD : NIM_MODIFY, &nid);
+
+	/* Balloon/info tip notification ([MS-RDPERP] 2.2.1.3.2.2.2). */
 	if (orderInfo->fieldFlags & WINDOW_ORDER_FIELD_NOTIFY_INFO_TIP)
 	{
+		NOTIFYICONDATA bnid = { 0 };
+		bnid.cbSize = sizeof(bnid);
+		bnid.hWnd = icon->hWnd;
+		bnid.uID = icon->uID;
+		bnid.uFlags = NIF_INFO;
+		const NOTIFY_ICON_INFOTIP* it = &notifyIconState->infoTip;
+		if (it->text.length > 0)
+		{
+			char* txt = ConvertWCharNToUtf8Alloc(
+			    (const WCHAR*)it->text.string, it->text.length / sizeof(WCHAR), NULL);
+			if (txt)
+			{
+				WCHAR* w = ConvertUtf8ToWCharAlloc(txt, NULL);
+				if (w)
+				{
+					wcsncpy(bnid.szInfo, w, ARRAYSIZE(bnid.szInfo) - 1);
+					free(w);
+				}
+				free(txt);
+			}
+		}
+		if (it->title.length > 0)
+		{
+			char* ttl = ConvertWCharNToUtf8Alloc(
+			    (const WCHAR*)it->title.string, it->title.length / sizeof(WCHAR), NULL);
+			if (ttl)
+			{
+				WCHAR* w = ConvertUtf8ToWCharAlloc(ttl, NULL);
+				if (w)
+				{
+					wcsncpy(bnid.szInfoTitle, w, ARRAYSIZE(bnid.szInfoTitle) - 1);
+					free(w);
+				}
+				free(ttl);
+			}
+		}
+		Shell_NotifyIcon(NIM_MODIFY, &bnid);
 	}
 
-	if (orderInfo->fieldFlags & WINDOW_ORDER_FIELD_NOTIFY_STATE)
-	{
-	}
-
-	if (orderInfo->fieldFlags & WINDOW_ORDER_ICON)
-	{
-		const ICON_INFO* iconInfo = &(notifyIconState->icon);
-		PrintRailIconInfo(orderInfo, iconInfo);
-	}
-
-	if (orderInfo->fieldFlags & WINDOW_ORDER_CACHED_ICON)
-	{
-	}
+	return TRUE;
 }
 
 static BOOL wf_rail_notify_icon_create(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
                                        const NOTIFY_ICON_STATE_ORDER* notifyIconState)
 {
-	wfContext* wfc = (wfContext*)context;
-	RailClientContext* rail = wfc->rail;
 	WLog_DBG(TAG, "RailNotifyIconCreate");
-	wf_rail_notify_icon_common(context, orderInfo, notifyIconState);
-	return TRUE;
+	return wf_rail_notify_icon_common(context, orderInfo, notifyIconState, TRUE);
 }
 
 static BOOL wf_rail_notify_icon_update(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
                                        const NOTIFY_ICON_STATE_ORDER* notifyIconState)
 {
-	wfContext* wfc = (wfContext*)context;
-	RailClientContext* rail = wfc->rail;
 	WLog_DBG(TAG, "RailNotifyIconUpdate");
-	wf_rail_notify_icon_common(context, orderInfo, notifyIconState);
-	return TRUE;
+	return wf_rail_notify_icon_common(context, orderInfo, notifyIconState, FALSE);
 }
 
 static BOOL wf_rail_notify_icon_delete(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo)
 {
 	wfContext* wfc = (wfContext*)context;
-	RailClientContext* rail = wfc->rail;
 	WLog_DBG(TAG, "RailNotifyIconDelete");
+	if (wfc->railNotifyIcons)
+	{
+		const UINT64 key = wf_notify_key(orderInfo->windowId, orderInfo->notifyIconId);
+		HashTable_Remove(wfc->railNotifyIcons, (void*)(UINT_PTR)key);
+	}
 	return TRUE;
 }
 
@@ -1297,7 +1542,17 @@ BOOL wf_rail_init(wfContext* wfc, RailClientContext* rail)
 	rail->ServerGetAppIdResponse = wf_rail_server_get_appid_response;
 	wf_rail_register_update_callbacks(context->update);
 	wfc->railWindows = HashTable_New(TRUE);
-	return (wfc->railWindows != nullptr);
+	if (!wfc->railWindows)
+		return FALSE;
+
+	/* System-tray (notification area) icons via Shell_NotifyIcon. */
+	wfc->railNotifyIcons = HashTable_New(TRUE);
+	if (wfc->railNotifyIcons)
+	{
+		wObject* obj = HashTable_ValueObject(wfc->railNotifyIcons);
+		obj->fnObjectFree = wf_notify_icon_free;
+	}
+	return TRUE;
 }
 
 void wf_rail_uninit(wfContext* wfc, RailClientContext* rail)
@@ -1305,4 +1560,10 @@ void wf_rail_uninit(wfContext* wfc, RailClientContext* rail)
 	wfc->rail = nullptr;
 	rail->custom = nullptr;
 	HashTable_Free(wfc->railWindows);
+	wfc->railWindows = nullptr;
+	if (wfc->railNotifyIcons)
+	{
+		HashTable_Free(wfc->railNotifyIcons);
+		wfc->railNotifyIcons = nullptr;
+	}
 }
