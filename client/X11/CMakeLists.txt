@@ -50,6 +50,8 @@ set(SRCS
     xf_rail.h
     xf_splash.c
     xf_splash.h
+    xf_tray.c
+    xf_tray.h
     xf_input.c
     xf_input.h
     xf_debug.h

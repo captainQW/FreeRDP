@@ -34,6 +34,7 @@
 #include "xf_rail.h"
 #include "xf_utils.h"
 #include "xf_splash.h"
+#include "xf_tray.h"
 
 #include <freerdp/log.h>
 #define TAG CLIENT_TAG("x11")
@@ -950,56 +951,24 @@ static BOOL xf_rail_window_cached_icon(rdpContext* context, const WINDOW_ORDER_I
 	return rc;
 }
 
-static BOOL
-xf_rail_notify_icon_common(WINPR_ATTR_UNUSED rdpContext* context,
-                           const WINDOW_ORDER_INFO* orderInfo,
-                           WINPR_ATTR_UNUSED const NOTIFY_ICON_STATE_ORDER* notifyIconState)
-{
-	WLog_ERR("TODO", "TODO: implement");
-	if (orderInfo->fieldFlags & WINDOW_ORDER_FIELD_NOTIFY_VERSION)
-	{
-	}
-
-	if (orderInfo->fieldFlags & WINDOW_ORDER_FIELD_NOTIFY_TIP)
-	{
-	}
-
-	if (orderInfo->fieldFlags & WINDOW_ORDER_FIELD_NOTIFY_INFO_TIP)
-	{
-	}
-
-	if (orderInfo->fieldFlags & WINDOW_ORDER_FIELD_NOTIFY_STATE)
-	{
-	}
-
-	if (orderInfo->fieldFlags & WINDOW_ORDER_ICON)
-	{
-	}
-
-	if (orderInfo->fieldFlags & WINDOW_ORDER_CACHED_ICON)
-	{
-	}
-
-	return TRUE;
-}
-
 static BOOL xf_rail_notify_icon_create(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
                                        const NOTIFY_ICON_STATE_ORDER* notifyIconState)
 {
-	return xf_rail_notify_icon_common(context, orderInfo, notifyIconState);
+	xfContext* xfc = (xfContext*)context;
+	return xf_tray_notify_icon_create(xfc, orderInfo, notifyIconState);
 }
 
 static BOOL xf_rail_notify_icon_update(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
                                        const NOTIFY_ICON_STATE_ORDER* notifyIconState)
 {
-	return xf_rail_notify_icon_common(context, orderInfo, notifyIconState);
+	xfContext* xfc = (xfContext*)context;
+	return xf_tray_notify_icon_update(xfc, orderInfo, notifyIconState);
 }
 
-static BOOL xf_rail_notify_icon_delete(WINPR_ATTR_UNUSED rdpContext* context,
-                                       WINPR_ATTR_UNUSED const WINDOW_ORDER_INFO* orderInfo)
+static BOOL xf_rail_notify_icon_delete(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo)
 {
-	WLog_ERR("TODO", "TODO: implement");
-	return TRUE;
+	xfContext* xfc = (xfContext*)context;
+	return xf_tray_notify_icon_delete(xfc, orderInfo);
 }
 
 static BOOL xf_rail_monitored_desktop(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
@@ -1442,6 +1411,9 @@ int xf_rail_uninit(xfContext* xfc, RailClientContext* rail)
 
 	/* Make sure no launch splash is left behind if we tear down RAIL. */
 	xf_splash_hide(xfc);
+
+	/* Release any RemoteApp system-tray (notification area) icons. */
+	xf_tray_uninit(xfc);
 
 	if (xfc->rail)
 	{

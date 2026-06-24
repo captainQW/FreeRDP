@@ -41,6 +41,7 @@
 #include "xf_graphics.h"
 #include "xf_utils.h"
 #include "xf_splash.h"
+#include "xf_tray.h"
 
 #include "xf_debug.h"
 #include "xf_event.h"
@@ -1210,6 +1211,11 @@ BOOL xf_event_process(freerdp* instance, const XEvent* event)
 			xf_splash_handle_expose(xfc);
 		return TRUE;
 	}
+
+	/* RemoteApp notification-area (system tray) icons are standalone XEmbed
+	 * windows; let the tray subsystem consume their expose/click/dock events. */
+	if (xf_tray_handle_event(xfc, event))
+		return TRUE;
 
 	if (xfc->remote_app)
 	{

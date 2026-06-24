@@ -294,6 +294,11 @@ struct xf_context
 	wHashTable* railWindows;
 	xfRailIconCache* railIconCache;
 
+	/* RemoteApp notification-area (system tray) icons, docked into the panel
+	 * via the freedesktop.org XEmbed System Tray Protocol. Opaque, owned by
+	 * xf_tray.c. */
+	void* tray;
+
 	/* RemoteApp launch splash ("Opening application ...") shown between the RDP
 	 * connection completing and the first remote application window appearing. */
 	xfSplash* splash;
