@@ -858,6 +858,16 @@ static BOOL wf_rail_window_delete(rdpContext* context, const WINDOW_ORDER_INFO* 
 	HashTable_Remove(wfc->railWindows, (void*)(UINT_PTR)orderInfo->windowId);
 	DestroyWindow(railWindow->hWnd);
 	free(railWindow);
+
+	/* Seamless RemoteApp lifecycle: once the last application window is gone the
+	 * session has nothing left to show. Disconnect so the user is never left
+	 * with an invisible (hidden host-window) connection or a flash of the remote
+	 * desktop. */
+	if (HashTable_Count(wfc->railWindows) == 0)
+	{
+		WLog_INFO(TAG, "Last RemoteApp window closed, disconnecting session");
+		freerdp_abort_connect_context(&wfc->common.context);
+	}
 	return TRUE;
 }
 

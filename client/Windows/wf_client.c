@@ -170,8 +170,15 @@ static BOOL wf_end_paint(rdpContext* context)
 		}
 #endif
 
-		PostMessage(wfc->hwnd, WM_FREERDP_SHOWWINDOW, 0, 0);
-		WLog_INFO(TAG, "Window is shown!");
+		/* In RemoteApp (RAIL) mode the main window is only a hidden host for the
+		 * shared desktop surface; the user must see the individual application
+		 * windows (created in wf_rail.c) and never the remote desktop / sign-in
+		 * screen. Do not map the desktop window in that case. */
+		if (!freerdp_settings_get_bool(context->settings, FreeRDP_RemoteApplicationMode))
+		{
+			PostMessage(wfc->hwnd, WM_FREERDP_SHOWWINDOW, 0, 0);
+			WLog_INFO(TAG, "Window is shown!");
+		}
 	}
 	return TRUE;
 }
@@ -275,6 +282,20 @@ static BOOL wf_pre_connect(freerdp* instance)
 		return FALSE;
 	wfc->fullscreen = freerdp_settings_get_bool(settings, FreeRDP_Fullscreen);
 	wfc->fullscreen_toggle = freerdp_settings_get_bool(settings, FreeRDP_ToggleFullscreen);
+
+	/* Seamless RemoteApp launch: when credentials are supplied up front, enable
+	 * auto-logon so the server signs in silently and no Windows logon UI is
+	 * shown before the application window appears. */
+	if (freerdp_settings_get_bool(settings, FreeRDP_RemoteApplicationMode))
+	{
+		const char* user = freerdp_settings_get_string(settings, FreeRDP_Username);
+		if (user && (strnlen(user, 1) > 0))
+		{
+			if (!freerdp_settings_set_bool(settings, FreeRDP_AutoLogonEnabled, TRUE))
+				return FALSE;
+		}
+	}
+
 	UINT32 desktopWidth = freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth);
 	UINT32 desktopHeight = freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight);
 
@@ -485,6 +506,8 @@ static BOOL wf_post_connect(freerdp* instance)
 			return FALSE;
 	}
 
+	const BOOL remoteApp = freerdp_settings_get_bool(settings, FreeRDP_RemoteApplicationMode);
+
 	if (wfc->fullscreen)
 		dwStyle = WS_POPUP;
 	else if (!freerdp_settings_get_bool(settings, FreeRDP_Decorations))
@@ -493,10 +516,18 @@ static BOOL wf_post_connect(freerdp* instance)
 		dwStyle =
 		    WS_CAPTION | WS_OVERLAPPED | WS_SYSMENU | WS_MINIMIZEBOX | WS_SIZEBOX | WS_MAXIMIZEBOX;
 
+	/* In RemoteApp (RAIL) mode the main window must never be visible: it only
+	 * hosts the shared desktop surface that backs the individual application
+	 * windows. Make it a borderless, zero-size popup so the remote desktop /
+	 * sign-in screen is never shown to the user. */
+	if (remoteApp)
+		dwStyle = WS_POPUP;
+
 	if (!wfc->hwnd)
 	{
-		wfc->hwnd = CreateWindowEx(0, wfc->wndClassName, wfc->window_title, dwStyle, 0, 0, 0, 0,
-		                           wfc->hWndParent, nullptr, wfc->hInstance, nullptr);
+		wfc->hwnd = CreateWindowEx(remoteApp ? WS_EX_TOOLWINDOW : 0, wfc->wndClassName,
+		                           wfc->window_title, dwStyle, 0, 0, 0, 0, wfc->hWndParent, nullptr,
+		                           wfc->hInstance, nullptr);
 		if (!wfc->hwnd)
 		{
 			WLog_ERR(TAG, "CreateWindowEx failed with error: %lu", GetLastError());
@@ -523,7 +554,9 @@ static BOOL wf_post_connect(freerdp* instance)
 		wfc->taskBarList->lpVtbl->SetProgressState(wfc->taskBarList, wfc->hwnd, TBPF_INDETERMINATE);
 	}
 #endif
-	UpdateWindow(wfc->hwnd);
+	/* Do not map/refresh the host window in RemoteApp mode (see above). */
+	if (!remoteApp)
+		UpdateWindow(wfc->hwnd);
 	context->update->BeginPaint = wf_begin_paint;
 	context->update->DesktopResize = wf_desktop_resize;
 	context->update->EndPaint = wf_end_paint;
