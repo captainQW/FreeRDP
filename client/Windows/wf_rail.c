@@ -37,6 +37,11 @@ struct wf_rail_window
 
 	HWND hWnd;
 
+	/* Remote RAIL window id this native window mirrors. Needed so the window
+	 * procedure can send client->server RAIL PDUs (activate, move, syscommand,
+	 * sysmenu) and align behavior with the X11 client. */
+	UINT32 windowId;
+
 	DWORD dwStyle;
 	DWORD dwExStyle;
 
@@ -45,6 +50,11 @@ struct wf_rail_window
 	int width;
 	int height;
 	char* title;
+
+	/* TRUE while a local (native) move/size loop driven by a server
+	 * Server Move/Size Start PDU is in progress. Used to send the final
+	 * position back with a Client Window Move PDU on WM_EXITSIZEMOVE. */
+	BOOL localMoveSizeActive;
 
 	/* Server-provided min/max tracking constraints (RAIL_MINMAXINFO_ORDER).
 	 * Enforced via WM_GETMINMAXINFO. hasMinMax stays FALSE until the server
@@ -292,6 +302,81 @@ static void PrintRailIconInfo(const WINDOW_ORDER_INFO* orderInfo, const ICON_INF
 	WLog_INFO(TAG, "}");
 }
 
+/* ---- client -> server RAIL PDU helpers (align Windows client with X11) ---- */
+
+/* Notify the server that the user activated (focus) or deactivated a RemoteApp
+ * window. [MS-RDPERP] 2.2.2.6.1 Client Activate PDU (TS_RAIL_ORDER_ACTIVATE). */
+static BOOL wf_rail_send_activate(wfContext* wfc, wfRailWindow* railWindow, BOOL enabled)
+{
+	RAIL_ACTIVATE_ORDER activate = { 0 };
+
+	if (!wfc || !wfc->rail || !railWindow)
+		return FALSE;
+
+	activate.windowId = railWindow->windowId;
+	activate.enabled = enabled;
+	return wfc->rail->ClientActivate(wfc->rail, &activate) == CHANNEL_RC_OK;
+}
+
+/* Notify the server of a system command (minimize/maximize/restore/close/...).
+ * [MS-RDPERP] 2.2.2.6.3 Client System Command PDU (TS_RAIL_ORDER_SYSCOMMAND). */
+static BOOL wf_rail_send_syscommand(wfContext* wfc, wfRailWindow* railWindow, UINT16 command)
+{
+	RAIL_SYSCOMMAND_ORDER syscommand = { 0 };
+
+	if (!wfc || !wfc->rail || !railWindow)
+		return FALSE;
+
+	syscommand.windowId = railWindow->windowId;
+	syscommand.command = command;
+	return wfc->rail->ClientSystemCommand(wfc->rail, &syscommand) == CHANNEL_RC_OK;
+}
+
+/* Ask the server to show the window system menu at the given screen position.
+ * [MS-RDPERP] 2.2.2.6.2 Client System Menu PDU (TS_RAIL_ORDER_SYSMENU). */
+static BOOL wf_rail_send_sysmenu(wfContext* wfc, wfRailWindow* railWindow, INT16 x, INT16 y)
+{
+	RAIL_SYSMENU_ORDER sysmenu = { 0 };
+
+	if (!wfc || !wfc->rail || !railWindow)
+		return FALSE;
+
+	sysmenu.windowId = railWindow->windowId;
+	sysmenu.left = x;
+	sysmenu.top = y;
+	return wfc->rail->ClientSystemMenu(wfc->rail, &sysmenu) == CHANNEL_RC_OK;
+}
+
+/* Inform the server that the local window position/size changed so the remote
+ * window follows. [MS-RDPERP] 2.2.2.7.4 Client Window Move PDU
+ * (TS_RAIL_ORDER_WINDOWMOVE). Coordinates are the window rect; per the spec the
+ * right/bottom edges are one pixel past the window. */
+static BOOL wf_rail_send_window_move(wfContext* wfc, wfRailWindow* railWindow)
+{
+	RAIL_WINDOW_MOVE_ORDER windowMove = { 0 };
+	RECT rect = { 0 };
+
+	if (!wfc || !wfc->rail || !railWindow)
+		return FALSE;
+
+	if (!GetWindowRect(railWindow->hWnd, &rect))
+		return FALSE;
+
+	/* keep the cached geometry in sync with the native window */
+	railWindow->x = rect.left;
+	railWindow->y = rect.top;
+	railWindow->width = rect.right - rect.left;
+	railWindow->height = rect.bottom - rect.top;
+
+	windowMove.windowId = railWindow->windowId;
+	windowMove.left = (INT16)rect.left;
+	windowMove.top = (INT16)rect.top;
+	windowMove.right = (INT16)rect.right;
+	windowMove.bottom = (INT16)rect.bottom;
+	return wfc->rail->ClientWindowMove(wfc->rail, &windowMove) == CHANNEL_RC_OK;
+}
+
+
 LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
 	HDC hDC;
@@ -408,6 +493,53 @@ LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 		case WM_MOUSEWHEEL:
 			break;
 
+		case WM_ACTIVATE:
+			/* Tell the server the RemoteApp window gained/lost activation so
+			 * remote focus tracks local focus ([MS-RDPERP] Client Activate). */
+			if (railWindow && wfc)
+			{
+				const BOOL enabled = (LOWORD(wParam) != WA_INACTIVE);
+				wf_rail_send_activate(wfc, railWindow, enabled);
+			}
+			return DefWindowProc(hWnd, msg, wParam, lParam);
+
+		case WM_SYSCOMMAND:
+			/* Forward window system commands (minimize/maximize/restore/close)
+			 * to the remote app instead of handling them purely locally, so the
+			 * remote window state stays in sync (RAIL-011). */
+			if (railWindow && wfc)
+			{
+				const UINT16 cmd = (UINT16)(wParam & 0xFFF0);
+				switch (cmd)
+				{
+					case SC_MINIMIZE:
+					case SC_MAXIMIZE:
+					case SC_RESTORE:
+					case SC_CLOSE:
+						if (wf_rail_send_syscommand(wfc, railWindow, cmd))
+							return 0;
+						break;
+					default:
+						break;
+				}
+			}
+			return DefWindowProc(hWnd, msg, wParam, lParam);
+
+		case WM_ENTERSIZEMOVE:
+			if (railWindow)
+				railWindow->localMoveSizeActive = TRUE;
+			return DefWindowProc(hWnd, msg, wParam, lParam);
+
+		case WM_EXITSIZEMOVE:
+			/* The local move/size loop finished: report the final geometry to
+			 * the server (RAIL-007 Client Window Move). */
+			if (railWindow && wfc)
+			{
+				railWindow->localMoveSizeActive = FALSE;
+				wf_rail_send_window_move(wfc, railWindow);
+			}
+			return DefWindowProc(hWnd, msg, wParam, lParam);
+
 		case WM_GETMINMAXINFO:
 			/* Enforce server-provided RAIL sizing constraints on the native
 			 * window so RemoteApp windows track the remote app's min/max sizes
@@ -438,6 +570,12 @@ LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 			return DefWindowProc(hWnd, msg, wParam, lParam);
 
 		case WM_CLOSE:
+			/* Ask the remote application to close (RAIL-011 SC_CLOSE). The
+			 * server will tear the window down via a Window Delete order, which
+			 * triggers wf_rail_window_delete. Only destroy locally if we cannot
+			 * reach the server. */
+			if (railWindow && wfc && wf_rail_send_syscommand(wfc, railWindow, SC_CLOSE))
+				return 0;
 			DestroyWindow(hWnd);
 			break;
 
@@ -479,6 +617,7 @@ static BOOL wf_rail_window_common(rdpContext* context, const WINDOW_ORDER_INFO* 
 			return FALSE;
 
 		railWindow->wfc = wfc;
+		railWindow->windowId = orderInfo->windowId;
 		railWindow->dwStyle = windowState->style;
 		railWindow->dwStyle &= ~RAIL_DISABLED_WINDOW_STYLES;
 		railWindow->dwExStyle = windowState->extendedStyle;
@@ -968,6 +1107,74 @@ static UINT wf_rail_server_handshake_ex(RailClientContext* context,
 static UINT wf_rail_server_local_move_size(RailClientContext* context,
                                            const RAIL_LOCALMOVESIZE_ORDER* localMoveSize)
 {
+	wfRailWindow* railWindow = nullptr;
+	WPARAM scCommand = 0;
+
+	WINPR_ASSERT(context);
+	WINPR_ASSERT(localMoveSize);
+
+	wfContext* wfc = (wfContext*)context->custom;
+	WINPR_ASSERT(wfc);
+
+	railWindow = (wfRailWindow*)HashTable_GetItemValue(wfc->railWindows,
+	                                                   (void*)(UINT_PTR)localMoveSize->windowId);
+	if (!railWindow)
+		return CHANNEL_RC_OK;
+
+	if (!localMoveSize->isMoveSizeStart)
+	{
+		/* End of a server-driven move/size: nothing extra to do, the native
+		 * modal loop ends on its own and WM_EXITSIZEMOVE reports the result. */
+		railWindow->localMoveSizeActive = FALSE;
+		return CHANNEL_RC_OK;
+	}
+
+	/* Map the RAIL move/size type to the matching Win32 SC_MOVE/SC_SIZE hit-test
+	 * sub-command, then kick off the native modal move/size loop. This mirrors
+	 * the X11 client driving the move/size via _NET_WM_MOVERESIZE. */
+	switch (localMoveSize->moveSizeType)
+	{
+		case RAIL_WMSZ_LEFT:
+			scCommand = SC_SIZE | WMSZ_LEFT;
+			break;
+		case RAIL_WMSZ_RIGHT:
+			scCommand = SC_SIZE | WMSZ_RIGHT;
+			break;
+		case RAIL_WMSZ_TOP:
+			scCommand = SC_SIZE | WMSZ_TOP;
+			break;
+		case RAIL_WMSZ_TOPLEFT:
+			scCommand = SC_SIZE | WMSZ_TOPLEFT;
+			break;
+		case RAIL_WMSZ_TOPRIGHT:
+			scCommand = SC_SIZE | WMSZ_TOPRIGHT;
+			break;
+		case RAIL_WMSZ_BOTTOM:
+			scCommand = SC_SIZE | WMSZ_BOTTOM;
+			break;
+		case RAIL_WMSZ_BOTTOMLEFT:
+			scCommand = SC_SIZE | WMSZ_BOTTOMLEFT;
+			break;
+		case RAIL_WMSZ_BOTTOMRIGHT:
+			scCommand = SC_SIZE | WMSZ_BOTTOMRIGHT;
+			break;
+		case RAIL_WMSZ_MOVE:
+		case RAIL_WMSZ_KEYMOVE:
+			scCommand = SC_MOVE;
+			break;
+		case RAIL_WMSZ_KEYSIZE:
+			scCommand = SC_SIZE;
+			break;
+		default:
+			return CHANNEL_RC_OK;
+	}
+
+	railWindow->localMoveSizeActive = TRUE;
+	/* Release any captured mouse and start the modal move/size loop. The
+	 * lParam carries the cursor position for SC_MOVE/SC_SIZE. */
+	ReleaseCapture();
+	PostMessage(railWindow->hWnd, WM_SYSCOMMAND, scCommand,
+	            MAKELPARAM(localMoveSize->posX, localMoveSize->posY));
 	return CHANNEL_RC_OK;
 }
 
