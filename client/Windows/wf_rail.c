@@ -519,6 +519,13 @@ LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 						if (wf_rail_send_syscommand(wfc, railWindow, cmd))
 							return 0;
 						break;
+					case SC_KEYMENU:
+						/* Alt+Space: ask the remote app to show its window
+						 * system menu (RAIL-010 Client System Menu). */
+						if (wf_rail_send_sysmenu(wfc, railWindow, (INT16)railWindow->x,
+						                         (INT16)railWindow->y))
+							return 0;
+						break;
 					default:
 						break;
 				}

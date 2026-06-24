@@ -46,6 +46,8 @@
 #include "xf_keyboard.h"
 
 #include "xf_utils.h"
+#include "xf_window.h"
+#include "xf_rail.h"
 #include "keyboard_x11.h"
 
 #include <freerdp/log.h>
@@ -1411,6 +1413,32 @@ BOOL xf_keyboard_handle_special_keys(xfContext* xfc, KeySym keysym)
 
 			default:
 				break;
+		}
+	}
+
+	/* RemoteApp: Alt+Space opens the remote window system menu, matching the
+	 * native Windows window-menu shortcut. Sends [MS-RDPERP] Client System Menu
+	 * PDU for the currently focused RAIL window. */
+	if (xfc->remote_app && mod.Alt && !mod.Ctrl && !mod.Shift &&
+	    ((keysym == XK_space) || (keysym == XK_KP_Space)))
+	{
+		Window focused = None;
+		int revertTo = 0;
+		XGetInputFocus(xfc->display, &focused, &revertTo);
+
+		if (focused != None)
+		{
+			xfAppWindow* appWindow = xf_AppWindowFromX11Window(xfc, focused);
+			if (appWindow)
+			{
+				const INT16 x = (INT16)appWindow->x;
+				const INT16 y = (INT16)appWindow->y;
+				const BOOL rc =
+				    xf_rail_send_client_sysmenu(xfc, appWindow->windowId, x, y);
+				xf_rail_return_window(appWindow, FALSE);
+				if (rc)
+					return TRUE;
+			}
 		}
 	}
 

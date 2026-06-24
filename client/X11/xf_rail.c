@@ -213,6 +213,23 @@ BOOL xf_rail_send_client_system_command(xfContext* xfc, UINT64 windowId, UINT16 
 	return rc == CHANNEL_RC_OK;
 }
 
+/* Ask the server to display the window system menu at the given screen
+ * position. [MS-RDPERP] 2.2.2.6.2 Client System Menu PDU (TS_RAIL_ORDER_SYSMENU).
+ * Triggered when the user requests the system menu of a RemoteApp window
+ * (e.g. right-click on the title bar / window menu key). */
+BOOL xf_rail_send_client_sysmenu(xfContext* xfc, UINT64 windowId, INT16 x, INT16 y)
+{
+	WINPR_ASSERT(xfc);
+	WINPR_ASSERT(xfc->rail);
+	WINPR_ASSERT(xfc->rail->ClientSystemMenu);
+	if (windowId > UINT32_MAX)
+		return FALSE;
+
+	const RAIL_SYSMENU_ORDER sysmenu = { .windowId = (UINT32)windowId, .left = x, .top = y };
+	const UINT rc = xfc->rail->ClientSystemMenu(xfc->rail, &sysmenu);
+	return rc == CHANNEL_RC_OK;
+}
+
 /**
  * The position of the X window can become out of sync with the RDP window
  * if the X window is moved locally by the window manager.  In this event
