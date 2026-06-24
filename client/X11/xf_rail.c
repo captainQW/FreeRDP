@@ -1422,6 +1422,70 @@ xf_rail_server_get_appid_response(RailClientContext* context,
 	return CHANNEL_RC_OK;
 }
 
+/**
+ * [MS-RDPERP] 2.2.2.11.1 Server Z-Order Sync Information PDU
+ * (TS_RAIL_ORDER_ZORDER_SYNC). The server tells the client the window id that
+ * marks the bottom of the application's window stack; raise it locally so the
+ * local Z-order tracks the remote session.
+ *
+ * @return 0 on success, otherwise a Win32 error code
+ */
+static UINT xf_rail_server_zorder_sync(RailClientContext* context, const RAIL_ZORDER_SYNC* zorder)
+{
+	xfContext* xfc = NULL;
+	xfAppWindow* appWindow = NULL;
+
+	WINPR_ASSERT(context);
+	WINPR_ASSERT(zorder);
+
+	xfc = (xfContext*)context->custom;
+	WINPR_ASSERT(xfc);
+
+	appWindow = xf_rail_get_window(xfc, zorder->windowIdMarker, FALSE);
+	if (appWindow)
+	{
+		LogDynAndXRaiseWindow(xfc->log, xfc->display, appWindow->handle);
+		LogDynAndXFlush(xfc->log, xfc->display);
+	}
+	xf_rail_return_window(appWindow, FALSE);
+
+	return CHANNEL_RC_OK;
+}
+
+/**
+ * [MS-RDPERP] 2.2.2.12.1 Window Cloak State Change PDU (TS_RAIL_ORDER_CLOAK).
+ * The server requests that a window be cloaked (hidden but still "alive") or
+ * uncloaked. Map cloak -> withdraw/unmap, uncloak -> map, so cloaked RemoteApp
+ * windows disappear locally just as they do in the remote session.
+ *
+ * @return 0 on success, otherwise a Win32 error code
+ */
+static UINT xf_rail_server_cloak(RailClientContext* context, const RAIL_CLOAK* cloak)
+{
+	xfContext* xfc = NULL;
+	xfAppWindow* appWindow = NULL;
+
+	WINPR_ASSERT(context);
+	WINPR_ASSERT(cloak);
+
+	xfc = (xfContext*)context->custom;
+	WINPR_ASSERT(xfc);
+
+	appWindow = xf_rail_get_window(xfc, cloak->windowId, FALSE);
+	if (appWindow)
+	{
+		appWindow->is_cloaked = cloak->cloak;
+		if (cloak->cloak)
+			LogDynAndXUnmapWindow(xfc->log, xfc->display, appWindow->handle);
+		else
+			LogDynAndXMapWindow(xfc->log, xfc->display, appWindow->handle);
+		LogDynAndXFlush(xfc->log, xfc->display);
+	}
+	xf_rail_return_window(appWindow, FALSE);
+
+	return CHANNEL_RC_OK;
+}
+
 static BOOL rail_window_key_equals(const void* key1, const void* key2)
 {
 	const UINT64* k1 = (const UINT64*)key1;
@@ -1465,6 +1529,8 @@ int xf_rail_init(xfContext* xfc, RailClientContext* rail)
 	rail->ServerMinMaxInfo = xf_rail_server_min_max_info;
 	rail->ServerLanguageBarInfo = xf_rail_server_language_bar_info;
 	rail->ServerGetAppIdResponse = xf_rail_server_get_appid_response;
+	rail->ServerZOrderSync = xf_rail_server_zorder_sync;
+	rail->ServerCloak = xf_rail_server_cloak;
 	xfc->railWindows = HashTable_New(TRUE);
 
 	if (!xfc->railWindows)
