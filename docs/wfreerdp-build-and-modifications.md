@@ -404,9 +404,21 @@ build-deps\build-freerdp.ps1
 
 `build-deps/vcpkg-install.ps1`：在无 MSVC 的环境下用 `x64-mingw-dynamic` triplet 安装
 `zlib`、`openssl`、`cjson`。注意不要设置 `VCPKG_FORCE_SYSTEM_BINARIES=1`（会让 vcpkg
-不去拉自带的 MSYS2 perl/make 工具链而失败）。完成后用 vcpkg 工具链文件
-`C:\vcpkg\scripts\buildsystems\vcpkg.cmake` 配合 `-DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic`
-重新配置 FreeRDP；也可以继续用 `build-deps/install`（已含可用 OpenSSL 3.6.2）做增量验证。
+不去拉自带的 MSYS2 perl/make 工具链而失败）。
+
+实测：该方式已在本环境**完整跑通**——vcpkg 自动拉取 powershell-core / 7zip / MSYS2
+（perl、make、bash 等）工具链，成功编译并安装：
+
+```
+cjson:x64-mingw-dynamic     1.7.19
+openssl:x64-mingw-dynamic   3.6.2
+zlib:x64-mingw-dynamic      1.3.2#1
+```
+
+产物位于 `C:\vcpkg\installed\x64-mingw-dynamic`（含 `bin\legacy.dll` 等 OpenSSL 模块）。
+完成后用 vcpkg 工具链文件 `C:\vcpkg\scripts\buildsystems\vcpkg.cmake` 配合
+`-DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic` 重新配置 FreeRDP；也可以继续用
+`build-deps/install`（已含可用 OpenSSL 3.6.2）做增量验证——本项目最终采用后者完成编译。
 
 ---
 
@@ -419,12 +431,39 @@ build-deps\build-freerdp.ps1
 - `wfreerdp.exe`
 - FreeRDP / WinPR 库：`libfreerdp3.dll`、`libfreerdp-client3.dll`、
   `libwfreerdp-client3.dll`、`libwinpr3.dll`
-- 依赖运行库：`libssl-3-x64.dll`、`libcrypto-3-x64.dll`（OpenSSL）、zlib
+- 依赖运行库：`libssl-3-x64.dll`、`libcrypto-3-x64.dll`（OpenSSL）、`libzlib.dll`
+- **OpenSSL legacy provider**：`ossl-modules\legacy.dll`（见下方“NTLM/NLA 关键依赖”）
 - H.264 解码器：`openh264.dll`（必须与 `wfreerdp.exe` 同目录，否则 AVC444/H.264 不可用）
-- MinGW 运行时：`libgcc_s_seh-1.dll`、`libwinpthread-1.dll`、`libstdc++-6.dll`、`libssp-0.dll`
+- MinGW 运行时：`libgcc_s_seh-1.dll`、`libwinpthread-1.dll`、`libstdc++-6.dll`
 - 便捷脚本 `run-example.cmd` 与 `README.txt`
 
 打包后已校验所有导入依赖均满足（`ALL_IMPORTS_SATISFIED`）。
+
+### 9.1 NTLM/NLA 关键依赖：OpenSSL legacy provider
+
+OpenSSL 3.x 把 **MD4**（NTLM 哈希）和 **RC4**（RDP 安全层、自动重连 cookie）算法移到了
+独立的 **legacy provider** 模块（`legacy.dll`）。如果运行时加载不到这个模块，WinPR 会打印：
+
+```
+OpenSSL LEGACY provider failed to load, no md4 support available!
+Failed to initialize digest md4
+* md4: NTLM support not available
+* rc4: RDP licensing and RDP security will not work
+```
+
+此时 **NLA 登录会直接失败**（NTLM 依赖 md4）。解决方法是随包发布与 `libcrypto-3-x64.dll`
+**同一版本**的 `legacy.dll`（取自相同的 MSYS2 OpenSSL 包，保证 ABI 一致），放到
+`dist/wfreerdp-x64/ossl-modules/`，并通过环境变量 `OPENSSL_MODULES` 指向该目录。
+`run-example.cmd` 已自动设置：
+
+```bat
+set OPENSSL_MODULES=%~dp0ossl-modules
+```
+
+若直接运行 `wfreerdp.exe`（不经由 `run-example.cmd`），需手动设置同样的环境变量。
+
+> 实测验证：设置 `OPENSSL_MODULES` 后，上述 `md4 / NTLM support not available /
+> RDP security will not work` 告警全部消失，客户端可正常进入 NLA 握手。
 
 ---
 
@@ -510,11 +549,15 @@ docker rm frdp
 
 ## 11. 尚未验证 / 后续事项
 
-- **编译验证**：受工具链/终端限制，TASK 9（GFX 接入 + RAIL 对齐）的改动尚未在本环境完成
-  最终编译验证。建议用现有 `build-deps/install` 做增量构建：
-  `cmake --build build --target wfreerdp`，确认通过后再继续。
+- **编译验证（已完成）**：Windows 客户端（含黑块隐藏 + setting + 命令行、GFX 管线接入、
+  RAIL exec-result/min-max 对齐、SSIZE_T 修复）已在本环境用 MinGW 64 位 + Ninja
+  **成功编译并打包**：`cmake --build build --target wfreerdp` 退出码 0，链接出
+  `wfreerdp.exe`（版本 `3.26.1-dev0 (3170213b5)`，OpenSSL 3.6.2）。冒烟测试确认
+  `/gfx:AVC444,conceal-black` 正常解析并进入连接流程。
 - **RAIL 仍落后于 X11 的部分**（窗口系统强相关，已暂缓）：本地 move/size（Win32 的
   `WM_SYSCOMMAND` + `SC_MOVE/SC_SIZE`）、图标缓存、RemoteApp 模式 enable/disable 深度、
   langbar、cloak/zorder 等。
+- **X11/Linux 改动**（第 5.3–5.6 节）属窗口系统强相关，**无法在本 Windows 环境编译验证**，
+  需在 Debian 实机或容器中用 `scripts/build-debian.sh` 复测。
 - 黑块的**根因是服务器 GPU 编码器故障**（`nvlddmkm` 事件 153）；客户端隐藏只是缓解手段，
   若条件允许应优先在服务器侧排查/更换编码器或驱动。

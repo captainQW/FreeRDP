@@ -34,8 +34,24 @@ Grab @(
     "$build\winpr\libwinpr\libwinpr3.dll"
 ) "FreeRDP core DLLs"
 
-Write-Output "== dependency libraries (LibreSSL / zlib) =="
-Grab @("$install\bin\*.dll") "LibreSSL/zlib runtime DLLs"
+Write-Output "== dependency libraries (OpenSSL / zlib) =="
+Grab @("$install\bin\*.dll") "OpenSSL/zlib runtime DLLs"
+
+Write-Output "== OpenSSL legacy provider (MD4/RC4 -> required for NTLM/NLA) =="
+# OpenSSL 3.x keeps MD4 (NTLM hash) and RC4 (RDP security / autoreconnect cookies)
+# in the 'legacy' provider module. Without it WinPR logs 'NTLM support not
+# available' and NLA logons fail. Ship the module that matches our libcrypto and
+# point OpenSSL at it via OPENSSL_MODULES (set by the launcher) plus a co-located
+# ossl-modules dir.
+$osslModules = Join-Path $dist "ossl-modules"
+New-Item -ItemType Directory -Force -Path $osslModules | Out-Null
+$legacy = "$repo\build-deps\msys2\openssl_pkg\mingw64\lib\ossl-modules\legacy.dll"
+if (Test-Path $legacy) {
+    Copy-Item $legacy $osslModules -Force
+    Write-Output "  + ossl-modules\legacy.dll"
+} else {
+    Write-Output "  ! MISSING: legacy.dll (NTLM/NLA will not work)"
+}
 
 Write-Output "== H.264 decoder =="
 Grab @("$repo\build-deps\openh264.dll") "openh264.dll"
@@ -56,6 +72,8 @@ REM Example launcher. Edit host/user as needed.
 REM Black-block concealment is enabled via /gfx:AVC444,conceal-black
 setlocal
 set HERE=%~dp0
+REM Point OpenSSL at the bundled legacy provider (MD4/RC4) so NTLM/NLA works.
+set OPENSSL_MODULES=%HERE%ossl-modules
 "%HERE%wfreerdp.exe" /v:%1 /u:%2 /gfx:AVC444,conceal-black /dynamic-resolution +clipboard /cert:ignore /from-stdin
 endlocal
 '@
@@ -67,7 +85,8 @@ wfreerdp (FreeRDP 3.x) - 64-bit standalone build with H.264 black-block concealm
 Contents
   wfreerdp.exe            - the client
   lib*3.dll               - FreeRDP / WinPR libraries
-  libcrypto/ssl/tls*.dll  - LibreSSL (TLS)
+  libcrypto/libssl*.dll   - OpenSSL 3.x (TLS)
+  ossl-modules\legacy.dll - OpenSSL legacy provider (MD4/RC4; required for NTLM/NLA)
   libzlib.dll             - zlib
   openh264.dll            - Cisco OpenH264 (H.264 decoder, loaded at runtime)
   libgcc/libwinpthread/.. - MinGW C/C++ runtime
@@ -75,6 +94,12 @@ Contents
 Black-block concealment (hides corrupt black macroblocks baked into the
 server H.264 stream by a faulty hardware encoder):
   wfreerdp.exe /v:HOST:PORT /u:USER /p:PASS /gfx:AVC444,conceal-black /f
+
+NTLM / NLA authentication
+  OpenSSL 3.x keeps MD4 (NTLM) and RC4 (RDP security) in the 'legacy' provider.
+  If you launch wfreerdp.exe directly (not via run-example.cmd), set:
+      set OPENSSL_MODULES=<this folder>\ossl-modules
+  otherwise NLA logons may fail with "NTLM support not available".
 
 Notes
   - openh264.dll MUST sit next to wfreerdp.exe for AVC444/H.264 to work.
