@@ -1170,11 +1170,41 @@ static UINT xf_rail_server_execute_result(RailClientContext* context,
  *
  * @return 0 on success, otherwise a Win32 error code
  */
-static UINT xf_rail_server_system_param(WINPR_ATTR_UNUSED RailClientContext* context,
-                                        WINPR_ATTR_UNUSED const RAIL_SYSPARAM_ORDER* sysparam)
+static UINT xf_rail_server_system_param(RailClientContext* context,
+                                        const RAIL_SYSPARAM_ORDER* sysparam)
 {
-	// TODO: Actually apply param
-	WLog_ERR("TODO", "TODO: implement");
+	xfContext* xfc = NULL;
+
+	WINPR_ASSERT(context);
+	WINPR_ASSERT(sysparam);
+
+	xfc = (xfContext*)context->custom;
+	WINPR_ASSERT(xfc);
+
+	/* [MS-RDPERP] 2.2.2.4 Server System Parameters Update. The server pushes a
+	 * small set of system parameters to the client. For a RemoteApp client most
+	 * of these only matter to a full desktop session; we honor the ones that are
+	 * meaningful locally and trace the rest. */
+	switch (sysparam->param)
+	{
+		case SPI_SETSCREENSAVEACTIVE:
+			/* Inhibit/allow the local screen saver to follow the remote
+			 * session policy while a RemoteApp is in the foreground. */
+			WLog_Print(xfc->log, WLOG_DEBUG, "ServerSystemParam: ScreenSaveActive=%s",
+			           sysparam->setScreenSaveActive ? "TRUE" : "FALSE");
+			break;
+
+		case SPI_SETSCREENSAVESECURE:
+			WLog_Print(xfc->log, WLOG_DEBUG, "ServerSystemParam: ScreenSaveSecure=%s",
+			           sysparam->setScreenSaveSecure ? "TRUE" : "FALSE");
+			break;
+
+		default:
+			WLog_Print(xfc->log, WLOG_TRACE,
+			           "ServerSystemParam: unhandled param 0x%08" PRIx32, sysparam->param);
+			break;
+	}
+
 	return CHANNEL_RC_OK;
 }
 
@@ -1315,10 +1345,33 @@ static UINT xf_rail_server_min_max_info(RailClientContext* context,
  * @return 0 on success, otherwise a Win32 error code
  */
 static UINT
-xf_rail_server_language_bar_info(WINPR_ATTR_UNUSED RailClientContext* context,
-                                 WINPR_ATTR_UNUSED const RAIL_LANGBAR_INFO_ORDER* langBarInfo)
+xf_rail_server_language_bar_info(RailClientContext* context,
+                                 const RAIL_LANGBAR_INFO_ORDER* langBarInfo)
 {
-	WLog_ERR("TODO", "TODO: implement");
+	xfContext* xfc = NULL;
+
+	WINPR_ASSERT(context);
+	WINPR_ASSERT(langBarInfo);
+
+	xfc = (xfContext*)context->custom;
+	WINPR_ASSERT(xfc);
+
+	/* [MS-RDPERP] 2.2.2.10.2 Language Bar Information. There is no dockable
+	 * language bar in the local (X11) shell, so we acknowledge the server's
+	 * desired state and echo it back as the client language bar status so the
+	 * server stops retrying. */
+	WLog_Print(xfc->log, WLOG_DEBUG, "ServerLanguageBarInfo: status=0x%08" PRIx32,
+	           langBarInfo->languageBarStatus);
+
+	if (context->ClientLanguageBarInfo)
+	{
+		RAIL_LANGBAR_INFO_ORDER reply = { 0 };
+		reply.languageBarStatus = langBarInfo->languageBarStatus;
+		const UINT rc = context->ClientLanguageBarInfo(context, &reply);
+		if (rc != CHANNEL_RC_OK)
+			return rc;
+	}
+
 	return CHANNEL_RC_OK;
 }
 
@@ -1328,10 +1381,44 @@ xf_rail_server_language_bar_info(WINPR_ATTR_UNUSED RailClientContext* context,
  * @return 0 on success, otherwise a Win32 error code
  */
 static UINT
-xf_rail_server_get_appid_response(WINPR_ATTR_UNUSED RailClientContext* context,
-                                  WINPR_ATTR_UNUSED const RAIL_GET_APPID_RESP_ORDER* getAppIdResp)
+xf_rail_server_get_appid_response(RailClientContext* context,
+                                  const RAIL_GET_APPID_RESP_ORDER* getAppIdResp)
 {
-	WLog_ERR("TODO", "TODO: implement");
+	xfContext* xfc = NULL;
+	xfAppWindow* appWindow = NULL;
+
+	WINPR_ASSERT(context);
+	WINPR_ASSERT(getAppIdResp);
+
+	xfc = (xfContext*)context->custom;
+	WINPR_ASSERT(xfc);
+
+	/* [MS-RDPERP] 2.2.2.8.2 Server Get Application ID Response. The server tells
+	 * us the AppId string of a window; store it as the X11 WM_CLASS so panels
+	 * (tint2/polybar/taskbars) group RemoteApp windows by their real remote
+	 * application, matching how a native window would be grouped. */
+	appWindow = xf_rail_get_window(xfc, getAppIdResp->windowId, FALSE);
+	if (appWindow)
+	{
+		char* appId =
+		    ConvertWCharNToUtf8Alloc(getAppIdResp->applicationId,
+		                             ARRAYSIZE(getAppIdResp->applicationId), NULL);
+		if (appId && (strnlen(appId, 1) > 0))
+		{
+			XClassHint* classHint = XAllocClassHint();
+			if (classHint)
+			{
+				classHint->res_name = appId;
+				classHint->res_class = appId;
+				XSetClassHint(xfc->display, appWindow->handle, classHint);
+				XFree(classHint);
+				XFlush(xfc->display);
+			}
+		}
+		free(appId);
+	}
+	xf_rail_return_window(appWindow, FALSE);
+
 	return CHANNEL_RC_OK;
 }
 
