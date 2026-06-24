@@ -37,6 +37,8 @@ set(${MODULE_PREFIX}_SRCS
     wlf_cliprdr.h
     wlf_channels.c
     wlf_channels.h
+    wlf_rail.c
+    wlf_rail.h
 )
 
 if(FREERDP_UNIFIED_BUILD)

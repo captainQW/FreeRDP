@@ -26,6 +26,7 @@
 #include <freerdp/log.h>
 #include <freerdp/locale/keyboard.h>
 #include <winpr/wtypes.h>
+#include <winpr/collections.h>
 #include <uwac/uwac.h>
 
 typedef struct wlf_clipboard wfClipboard;
@@ -51,6 +52,12 @@ typedef struct
 	CRITICAL_SECTION critical;
 	wArrayList* events;
 	FREERDP_REMAP_TABLE* remap_table;
+
+	/* RemoteApp (RAIL) integration. rail is the client channel context, set
+	 * when the "rail" channel connects; railWindows maps a remote RAIL window
+	 * id to its native wlfRailWindow / UwacWindow. */
+	void* rail; /* RailClientContext* */
+	wHashTable* railWindows;
 } wlfContext;
 
 BOOL wlf_scale_coordinates(rdpContext* context, UINT32* px, UINT32* py, BOOL fromLocalToRDP);

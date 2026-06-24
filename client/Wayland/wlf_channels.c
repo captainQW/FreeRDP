@@ -26,6 +26,7 @@
 #include "wlf_channels.h"
 #include "wlf_cliprdr.h"
 #include "wlf_disp.h"
+#include "wlf_rail.h"
 #include "wlfreerdp.h"
 
 void wlf_OnChannelConnectedEventHandler(void* context, const ChannelConnectedEventArgs* e)
@@ -40,6 +41,7 @@ void wlf_OnChannelConnectedEventHandler(void* context, const ChannelConnectedEve
 	}
 	else if (strcmp(e->name, RAIL_SVC_CHANNEL_NAME) == 0)
 	{
+		wlf_rail_init(wlf, (RailClientContext*)e->pInterface);
 	}
 	else if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0)
 	{
@@ -65,6 +67,7 @@ void wlf_OnChannelDisconnectedEventHandler(void* context, const ChannelDisconnec
 	}
 	else if (strcmp(e->name, RAIL_SVC_CHANNEL_NAME) == 0)
 	{
+		wlf_rail_uninit(wlf, (RailClientContext*)e->pInterface);
 	}
 	else if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0)
 	{
