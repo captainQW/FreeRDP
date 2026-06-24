@@ -26,6 +26,7 @@
 #import "Clipboard.h"
 #import "PasswordDialog.h"
 #import "CertificateDialog.h"
+#import "mf_rail.h"
 
 #include <winpr/crt.h>
 #include <winpr/assert.h>
@@ -840,6 +841,10 @@ static void mac_OnChannelConnectedEventHandler(void *context, const ChannelConne
 	{
 		mac_cliprdr_init(mfc, (CliprdrClientContext *)e->pInterface);
 	}
+	else if (strcmp(e->name, RAIL_SVC_CHANNEL_NAME) == 0)
+	{
+		mac_rail_init(mfc, (RailClientContext *)e->pInterface);
+	}
 	else if (strcmp(e->name, ENCOMSP_SVC_CHANNEL_NAME) == 0)
 	{
 	}
@@ -862,6 +867,10 @@ static void mac_OnChannelDisconnectedEventHandler(void *context,
 	if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0)
 	{
 		mac_cliprdr_uninit(mfc, (CliprdrClientContext *)e->pInterface);
+	}
+	else if (strcmp(e->name, RAIL_SVC_CHANNEL_NAME) == 0)
+	{
+		mac_rail_uninit(mfc, (RailClientContext *)e->pInterface);
 	}
 	else if (strcmp(e->name, ENCOMSP_SVC_CHANNEL_NAME) == 0)
 	{

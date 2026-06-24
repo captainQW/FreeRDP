@@ -22,6 +22,9 @@
 #include <winpr/synch.h>
 #include <winpr/thread.h>
 #include <winpr/clipboard.h>
+#include <winpr/collections.h>
+
+#include <freerdp/client/rail.h>
 
 #include "Keyboard.h"
 #include <CoreGraphics/CoreGraphics.h>
@@ -61,6 +64,12 @@ typedef struct
 	CLIPRDR_FORMAT* serverFormats;
 	CliprdrClientContext* cliprdr;
 	UINT32 clipboardCapabilities;
+
+	/* RemoteApp (RAIL) integration. rail is the client channel context, set
+	 * when the "rail" channel connects; railWindows maps a remote RAIL window
+	 * id to its native macRailWindow / NSWindow. */
+	RailClientContext* rail;
+	wHashTable* railWindows;
 
 	rdpFile* connectionRdpFile;
 

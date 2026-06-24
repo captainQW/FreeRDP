@@ -32,6 +32,7 @@ set(OBJECTIVE_SOURCES
     Clipboard.m
     CertificateDialog.m
     PasswordDialog.m
+    mf_rail.m
 )
 
 list(APPEND SOURCES ${OBJECTIVE_SOURCES})
@@ -45,6 +46,7 @@ set(HEADERS
     Clipboard.h
     CertificateDialog.h
     PasswordDialog.h
+    mf_rail.h
 )
 
 set(RESOURCES "en.lproj/InfoPlist.strings")
