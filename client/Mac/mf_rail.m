@@ -27,6 +27,7 @@
 
 #include <freerdp/log.h>
 #include <freerdp/window.h>
+#include <freerdp/codec/color.h>
 #include <freerdp/client/rail.h>
 
 #include "mf_rail.h"
@@ -415,12 +416,132 @@ static BOOL mac_rail_window_delete(rdpContext* context, const WINDOW_ORDER_INFO*
 	return TRUE;
 }
 
+/* ----------------------------------------------------------------- */
+/* RAIL notification icons -> macOS Menu Bar status items.            */
+/* macOS has no system tray; the documented equivalent is an          */
+/* NSStatusItem in the menu bar (see design doc section 11).          */
+/* ----------------------------------------------------------------- */
+
+static UINT64 mac_rail_notify_key(UINT32 windowId, UINT32 notifyIconId)
+{
+	return (((UINT64)windowId) << 32) | (UINT64)notifyIconId;
+}
+
+/* Controller object retained as the status item's target; forwards menu-bar
+ * clicks back to the server as RAIL Notify Event PDUs. */
+@interface MacRailStatusItem : NSObject
+@property (nonatomic, strong) NSStatusItem* item;
+@property (nonatomic, assign) mfContext* mfc;
+@property (nonatomic, assign) UINT32 windowId;
+@property (nonatomic, assign) UINT32 notifyIconId;
+@end
+
+@implementation MacRailStatusItem
+- (void)clicked:(id)sender
+{
+	if (self.mfc && self.mfc->rail)
+	{
+		RAIL_NOTIFY_EVENT_ORDER notify = { 0 };
+		notify.windowId = self.windowId;
+		notify.notifyIconId = self.notifyIconId;
+		notify.message = WM_LBUTTONUP;
+		(void)self.mfc->rail->ClientNotifyEvent(self.mfc->rail, &notify);
+
+		notify.message = NIN_SELECT;
+		(void)self.mfc->rail->ClientNotifyEvent(self.mfc->rail, &notify);
+	}
+}
+@end
+
+static void mac_rail_status_item_free(void* value)
+{
+	MacRailStatusItem* ctl = (__bridge_transfer MacRailStatusItem*)value;
+	if (ctl)
+	{
+		@autoreleasepool
+		{
+			if (ctl.item)
+				[[NSStatusBar systemStatusBar] removeStatusItem:ctl.item];
+			ctl.item = nil;
+		}
+	}
+}
+
+/* Convert a RAIL ICON_INFO into an NSImage (premultiplied BGRA). Returns a
+ * retained NSImage* via __bridge_retained in 'out' or nil on failure. */
+static NSImage* mac_rail_icon_to_nsimage(const ICON_INFO* iconInfo)
+{
+	const UINT32 w = iconInfo->width;
+	const UINT32 h = iconInfo->height;
+	BYTE* argb = NULL;
+	NSBitmapImageRep* rep = NULL;
+	NSImage* image = NULL;
+
+	if ((w == 0) || (h == 0))
+		return nil;
+
+	argb = (BYTE*)calloc((size_t)w * h, 4);
+	if (!argb)
+		return nil;
+
+	if (!freerdp_image_copy_from_icon_data(
+	        argb, PIXEL_FORMAT_RGBA32, 0, 0, 0, (UINT16)w, (UINT16)h, iconInfo->bitsColor,
+	        (UINT16)iconInfo->cbBitsColor, iconInfo->bitsMask, (UINT16)iconInfo->cbBitsMask,
+	        iconInfo->colorTable, (UINT16)iconInfo->cbColorTable, iconInfo->bpp))
+	{
+		free(argb);
+		return nil;
+	}
+
+	rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+	                                              pixelsWide:(NSInteger)w
+	                                              pixelsHigh:(NSInteger)h
+	                                           bitsPerSample:8
+	                                         samplesPerPixel:4
+	                                                hasAlpha:YES
+	                                                isPlanar:NO
+	                                          colorSpaceName:NSCalibratedRGBColorSpace
+	                                             bytesPerRow:(NSInteger)(w * 4)
+	                                            bitsPerPixel:32];
+	if (!rep)
+	{
+		free(argb);
+		return nil;
+	}
+
+	memcpy([rep bitmapData], argb, (size_t)w * h * 4);
+	free(argb);
+
+	image = [[NSImage alloc] initWithSize:NSMakeSize((CGFloat)w, (CGFloat)h)];
+	[image addRepresentation:rep];
+	return image;
+}
+
 static BOOL mac_rail_window_icon(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
                                  const WINDOW_ICON_ORDER* windowIcon)
 {
-	WINPR_UNUSED(context);
-	WINPR_UNUSED(orderInfo);
-	WINPR_UNUSED(windowIcon);
+	mfContext* mfc = (mfContext*)context;
+	macRailWindow* window = NULL;
+
+	WINPR_ASSERT(mfc);
+	WINPR_ASSERT(orderInfo);
+
+	window = mac_rail_get_window(mfc, orderInfo->windowId);
+	if (!window || !window->nsWindow || !windowIcon || !windowIcon->iconInfo)
+		return TRUE;
+
+	@autoreleasepool
+	{
+		NSImage* icon = mac_rail_icon_to_nsimage(windowIcon->iconInfo);
+		if (icon)
+		{
+			NSWindow* nsWindow = (__bridge NSWindow*)window->nsWindow;
+			/* Show the remote app's icon in the window's title-bar document
+			 * icon and as the app icon, matching native behavior (APP-001). */
+			[nsWindow setRepresentedURL:[NSURL fileURLWithPath:@"/"]];
+			[[nsWindow standardWindowButton:NSWindowDocumentIconButton] setImage:icon];
+		}
+	}
 	return TRUE;
 }
 
@@ -433,28 +554,99 @@ static BOOL mac_rail_window_cached_icon(rdpContext* context, const WINDOW_ORDER_
 	return TRUE;
 }
 
+/* Create or update the menu-bar status item that represents a RAIL
+ * notification-area icon. */
+static BOOL mac_rail_notify_icon_set(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
+                                     const NOTIFY_ICON_STATE_ORDER* notifyIconState)
+{
+	mfContext* mfc = (mfContext*)context;
+	MacRailStatusItem* ctl = NULL;
+	UINT64 key = 0;
+
+	WINPR_ASSERT(mfc);
+	WINPR_ASSERT(orderInfo);
+	WINPR_ASSERT(notifyIconState);
+
+	if (!mfc->railStatusItems)
+		return TRUE;
+
+	key = mac_rail_notify_key(orderInfo->windowId, orderInfo->notifyIconId);
+
+	@autoreleasepool
+	{
+		void* existing = HashTable_GetItemValue(mfc->railStatusItems, (void*)(UINT_PTR)key);
+		if (existing)
+			ctl = (__bridge MacRailStatusItem*)existing;
+
+		if (!ctl)
+		{
+			ctl = [[MacRailStatusItem alloc] init];
+			ctl.mfc = mfc;
+			ctl.windowId = orderInfo->windowId;
+			ctl.notifyIconId = orderInfo->notifyIconId;
+			ctl.item = [[NSStatusBar systemStatusBar]
+			    statusItemWithLength:NSSquareStatusItemLength];
+			ctl.item.button.target = ctl;
+			ctl.item.button.action = @selector(clicked:);
+
+			if (!HashTable_Insert(mfc->railStatusItems, (void*)(UINT_PTR)key,
+			                      (__bridge_retained void*)ctl))
+				return FALSE;
+		}
+
+		if (orderInfo->fieldFlags & WINDOW_ORDER_ICON)
+		{
+			NSImage* icon = mac_rail_icon_to_nsimage(&notifyIconState->icon);
+			if (icon)
+			{
+				icon.size = NSMakeSize(18, 18); /* standard menu-bar size */
+				ctl.item.button.image = icon;
+			}
+		}
+
+		if (orderInfo->fieldFlags & WINDOW_ORDER_FIELD_NOTIFY_TIP)
+		{
+			const WCHAR* str = (const WCHAR*)notifyIconState->toolTip.string;
+			if (notifyIconState->toolTip.length > 0)
+			{
+				char* tip = ConvertWCharNToUtf8Alloc(
+				    str, notifyIconState->toolTip.length / sizeof(WCHAR), NULL);
+				if (tip)
+				{
+					ctl.item.button.toolTip = [NSString stringWithUTF8String:tip];
+					free(tip);
+				}
+			}
+		}
+	}
+	return TRUE;
+}
+
 static BOOL mac_rail_notify_icon_create(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
                                         const NOTIFY_ICON_STATE_ORDER* notifyIconState)
 {
-	WINPR_UNUSED(context);
-	WINPR_UNUSED(orderInfo);
-	WINPR_UNUSED(notifyIconState);
-	return TRUE;
+	return mac_rail_notify_icon_set(context, orderInfo, notifyIconState);
 }
 
 static BOOL mac_rail_notify_icon_update(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo,
                                         const NOTIFY_ICON_STATE_ORDER* notifyIconState)
 {
-	WINPR_UNUSED(context);
-	WINPR_UNUSED(orderInfo);
-	WINPR_UNUSED(notifyIconState);
-	return TRUE;
+	return mac_rail_notify_icon_set(context, orderInfo, notifyIconState);
 }
 
 static BOOL mac_rail_notify_icon_delete(rdpContext* context, const WINDOW_ORDER_INFO* orderInfo)
 {
-	WINPR_UNUSED(context);
-	WINPR_UNUSED(orderInfo);
+	mfContext* mfc = (mfContext*)context;
+	UINT64 key = 0;
+
+	WINPR_ASSERT(mfc);
+	WINPR_ASSERT(orderInfo);
+
+	if (!mfc->railStatusItems)
+		return TRUE;
+
+	key = mac_rail_notify_key(orderInfo->windowId, orderInfo->notifyIconId);
+	HashTable_Remove(mfc->railStatusItems, (void*)(UINT_PTR)key);
 	return TRUE;
 }
 
@@ -649,6 +841,14 @@ BOOL mac_rail_init(mfContext* mfc, RailClientContext* rail)
 		wObject* obj = HashTable_ValueObject(mfc->railWindows);
 		obj->fnObjectFree = mac_rail_window_free;
 	}
+
+	/* Menu-bar status items for RAIL notification-area icons. */
+	mfc->railStatusItems = HashTable_New(TRUE);
+	if (mfc->railStatusItems)
+	{
+		wObject* obj = HashTable_ValueObject(mfc->railStatusItems);
+		obj->fnObjectFree = mac_rail_status_item_free;
+	}
 	return TRUE;
 }
 
@@ -665,5 +865,11 @@ void mac_rail_uninit(mfContext* mfc, RailClientContext* rail)
 	{
 		HashTable_Free(mfc->railWindows);
 		mfc->railWindows = NULL;
+	}
+
+	if (mfc->railStatusItems)
+	{
+		HashTable_Free(mfc->railStatusItems);
+		mfc->railStatusItems = NULL;
 	}
 }

@@ -71,6 +71,10 @@ typedef struct
 	RailClientContext* rail;
 	wHashTable* railWindows;
 
+	/* RemoteApp notification-area icons mapped to macOS menu-bar NSStatusItems
+	 * (key = windowId<<32|notifyIconId). */
+	wHashTable* railStatusItems;
+
 	rdpFile* connectionRdpFile;
 
 	// Keep track of window size and position, disable when in fullscreen mode.

@@ -610,7 +610,17 @@ static BOOL updateFlagState(rdpInput *input, DWORD modFlags, DWORD aKbdModFlags,
 
 		case NSEventModifierFlagCommand:
 			name = "NSEventModifierFlagCommand";
-			scancode = RDP_SCANCODE_LWIN;
+			/* In RemoteApp (RAIL) mode, map the macOS Command key to Ctrl so
+			 * that Cmd+C/V/X/Z/A/S/... behave like the native Windows
+			 * shortcuts the remote application expects (see macOS design doc
+			 * section 3, "Cmd <-> Ctrl"). In a normal desktop session keep the
+			 * historical mapping to the Windows (Super) key. */
+			if (input && input->context && input->context->settings &&
+			    freerdp_settings_get_bool(input->context->settings,
+			                              FreeRDP_RemoteApplicationMode))
+				scancode = RDP_SCANCODE_LCONTROL;
+			else
+				scancode = RDP_SCANCODE_LWIN;
 			break;
 
 		case NSEventModifierFlagNumericPad:
