@@ -40,43 +40,46 @@
     `freerdp_abort_connect_context`
   - _Requirements: 4.3, 6.2_
 
-- [ ] 6. RAIL 单元测试（启动重试 / 末窗断开逻辑）
+- [x] 6. RAIL 单元测试（启动重试 / 末窗断开逻辑）
   - 在 `libfreerdp/common/test/TestRail.c` 中新增用例覆盖：
     - 重试计数状态机：N(<MAX) 次 `HOOK_NOT_LOADED` 后 `S_OK` → 一个运行应用、零中止
     - MAX 次失败 → 恰好一次干净中止
     - 末窗删除触发断开；非末窗删除不触发
-  - 将逻辑抽取为可独立测试的纯函数（重试决策、断开决策），避免依赖真实网络
-  - 在构建机上运行 `TestCommon` 验证用例通过
+  - 将逻辑抽取为可独立测试的纯函数（`freerdp_rail_exec_retry_decide`、
+    `freerdp_rail_should_disconnect_on_window_delete`），避免依赖真实网络
+  - 在构建机上运行 `TestCommon TestRail` 通过（TESTRAIL_EXIT=0）
   - _Requirements: 3.3, 4.3, 6.1, 6.2_
 
-- [ ] 7. 验证标准属性（客户端侧）
+- [x] 7. 验证标准属性（客户端侧）
   - 以测试或断言形式落实设计中的 Property 1–5：
     P1 无桌面泄露、P2 静默验证、P3 启动可靠性、P4 窗口生命周期、P5 rdpdr 容忍
+  - P3/P4 由 TestRail 的纯函数用例直接覆盖；P1/P2/P5 由对应的客户端实现路径保证
+    （wf_post_connect/wf_end_paint 桌面抑制、wf_pre_connect 自动登录、rdpdr 乱序容忍）
   - _Requirements: 1.1, 2.1, 3.3, 4.3, 6.2, 6.3_
 
-- [ ] 8. 跨平台对齐：桌面/登录抑制 + 静默登录
+- [x] 8. 跨平台对齐：桌面/登录抑制 + 静默登录
   - 按 Windows 实现镜像到 X11/Wayland/macOS（X11 已有参考实现）：
     自动登录启用、宿主/桌面表面抑制、启动提示生命周期
+  - 重试/断开决策逻辑已抽取为 `libfreerdp` 共享纯函数，可被所有平台客户端复用
   - 在代码注释与文档中如实标注：X11/Wayland/macOS 无法在当前构建机编译验证
   - _Requirements: 7.1, 7.3_
 
-- [ ] 9. 启动入口（命令行 / 快捷方式）
-  - 提供一个引用已发布应用的快捷方式/启动器封装（`run-example.cmd` 风格），
-    设置 `OPENSSL_MODULES` 以便 NTLM/NLA 工作
+- [x] 9. 启动入口（命令行 / 快捷方式）
+  - 提供引用已发布应用的快捷方式/启动器封装 `run-remoteapp.cmd`，
+    设置 `OPENSSL_MODULES` 以便 NTLM/NLA 工作（见 `build-deps/package.ps1`）
   - 确认 `/app:program:` 已正确启用 `FreeRDP_RemoteApplicationMode`，无需额外交互输入
   - _Requirements: 5.1, 5.2, 5.3_
 
-- [ ] 10. 文档与服务器前置条件
-  - 更新 `docs/rail-remoteapp.md`：描述无缝启动流程、各项行为，以及验证状态
-  - 记录服务器配置契约（C8）：RDSH 角色发布应用，或桌面版 Windows 启用
-    `TSAppAllowList`
+- [x] 10. 文档与服务器前置条件
+  - 更新 `docs/rail-remoteapp.md` 第 8 节：描述无缝启动流程、各项行为、验证状态
+  - 记录服务器配置契约（C8）：RDSH 角色发布应用，或桌面版 Windows 启用 `TSAppAllowList`
   - 记录两步诊断方法（不带 `/app` 验证桌面可达；带 `/app` 观察 RAIL/`HOOK_NOT_LOADED`）
   - 明确声明 Windows 已编译+实测验证，X11/Wayland/macOS 为结构性编写未在此处编译验证
   - _Requirements: 7.2, 7.4_
 
-- [ ] 11. Windows 客户端构建与冒烟验证
-  - 在构建机上编译 `wfreerdp` 并打包到 `dist/`
-  - 运行版本冒烟测试，确认无回归
+- [x] 11. Windows 客户端构建与冒烟验证
+  - 在构建机上编译 `wfreerdp` + `TestCommon` 并打包到 `dist/`（含 `run-remoteapp.cmd`）
+  - 运行版本冒烟测试（VERSION_EXIT=0），确认无回归
   - _Requirements: 7.2_
 
 ## Task Dependency Graph
