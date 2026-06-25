@@ -119,6 +119,118 @@ static BOOL test_rail_flag_strings(void)
 	return TRUE;
 }
 
+/* Property 3 (launch reliability) + Property 4 (window lifecycle):
+ * exercise the pure decision helpers that drive the seamless-launch retry loop
+ * and the close-to-disconnect behavior. These are the exact functions the
+ * Windows client calls, so the test pins down shipping behavior. */
+static BOOL test_rail_exec_retry_decision(void)
+{
+	const UINT32 maxRetries = FREERDP_RAIL_EXEC_DEFAULT_MAX_RETRIES;
+
+	/* RAIL_EXEC_S_OK always means launched, regardless of retry count. */
+	if (freerdp_rail_exec_retry_decide(RAIL_EXEC_S_OK, 0, maxRetries) != FREERDP_RAIL_EXEC_LAUNCHED)
+	{
+		(void)fprintf(stderr, "S_OK should be LAUNCHED\n");
+		return FALSE;
+	}
+	if (freerdp_rail_exec_retry_decide(RAIL_EXEC_S_OK, maxRetries, maxRetries) !=
+	    FREERDP_RAIL_EXEC_LAUNCHED)
+	{
+		(void)fprintf(stderr, "S_OK should be LAUNCHED even at max retries\n");
+		return FALSE;
+	}
+
+	/* HOOK_NOT_LOADED below the budget must retry. */
+	for (UINT32 i = 0; i < maxRetries; i++)
+	{
+		if (freerdp_rail_exec_retry_decide(RAIL_EXEC_E_HOOK_NOT_LOADED, i, maxRetries) !=
+		    FREERDP_RAIL_EXEC_RETRY)
+		{
+			(void)fprintf(stderr, "HOOK_NOT_LOADED at retry %" PRIu32 " should RETRY\n", i);
+			return FALSE;
+		}
+	}
+
+	/* HOOK_NOT_LOADED at/after the budget must give up (exactly one clean abort). */
+	if (freerdp_rail_exec_retry_decide(RAIL_EXEC_E_HOOK_NOT_LOADED, maxRetries, maxRetries) !=
+	    FREERDP_RAIL_EXEC_GIVE_UP)
+	{
+		(void)fprintf(stderr, "HOOK_NOT_LOADED at budget should GIVE_UP\n");
+		return FALSE;
+	}
+
+	/* Every other error code is terminal: never retry. */
+	const UINT16 fatal[] = { RAIL_EXEC_E_DECODE_FAILED, RAIL_EXEC_E_NOT_IN_ALLOWLIST,
+		                     RAIL_EXEC_E_FILE_NOT_FOUND, RAIL_EXEC_E_FAIL,
+		                     RAIL_EXEC_E_SESSION_LOCKED };
+	for (size_t i = 0; i < ARRAYSIZE(fatal); i++)
+	{
+		if (freerdp_rail_exec_retry_decide(fatal[i], 0, maxRetries) != FREERDP_RAIL_EXEC_GIVE_UP)
+		{
+			(void)fprintf(stderr, "fatal code 0x%04" PRIx16 " should GIVE_UP\n", fatal[i]);
+			return FALSE;
+		}
+	}
+
+	/* Simulate the full P3 sequence: N (<MAX) transient failures then S_OK ->
+	 * exactly one launch, zero give-ups. */
+	{
+		UINT32 retries = 0;
+		UINT32 launches = 0;
+		UINT32 giveUps = 0;
+		const UINT16 seq[] = { RAIL_EXEC_E_HOOK_NOT_LOADED, RAIL_EXEC_E_HOOK_NOT_LOADED,
+			                   RAIL_EXEC_E_HOOK_NOT_LOADED, RAIL_EXEC_S_OK };
+		for (size_t i = 0; i < ARRAYSIZE(seq); i++)
+		{
+			switch (freerdp_rail_exec_retry_decide(seq[i], retries, maxRetries))
+			{
+				case FREERDP_RAIL_EXEC_RETRY:
+					retries++;
+					break;
+				case FREERDP_RAIL_EXEC_LAUNCHED:
+					launches++;
+					break;
+				case FREERDP_RAIL_EXEC_GIVE_UP:
+					giveUps++;
+					break;
+				default:
+					break;
+			}
+		}
+		if ((launches != 1) || (giveUps != 0) || (retries != 3))
+		{
+			(void)fprintf(stderr,
+			              "P3 sequence wrong: launches=%" PRIu32 " giveUps=%" PRIu32
+			              " retries=%" PRIu32 "\n",
+			              launches, giveUps, retries);
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+static BOOL test_rail_disconnect_on_window_delete(void)
+{
+	/* Property 4: closing the last window disconnects; a non-last delete does not. */
+	if (!freerdp_rail_should_disconnect_on_window_delete(0))
+	{
+		(void)fprintf(stderr, "0 remaining windows should disconnect\n");
+		return FALSE;
+	}
+	if (freerdp_rail_should_disconnect_on_window_delete(1))
+	{
+		(void)fprintf(stderr, "1 remaining window must NOT disconnect\n");
+		return FALSE;
+	}
+	if (freerdp_rail_should_disconnect_on_window_delete(5))
+	{
+		(void)fprintf(stderr, "5 remaining windows must NOT disconnect\n");
+		return FALSE;
+	}
+	return TRUE;
+}
+
 int TestRail(int argc, char* argv[])
 {
 	const char* samples[] = { "", "Notepad", "Excel - Book1.xlsx",
@@ -139,6 +251,18 @@ int TestRail(int argc, char* argv[])
 	if (!test_rail_flag_strings())
 	{
 		(void)fprintf(stderr, "RAIL flag string formatting test failed\n");
+		return -1;
+	}
+
+	if (!test_rail_exec_retry_decision())
+	{
+		(void)fprintf(stderr, "RAIL exec retry decision test failed\n");
+		return -1;
+	}
+
+	if (!test_rail_disconnect_on_window_delete())
+	{
+		(void)fprintf(stderr, "RAIL disconnect-on-window-delete test failed\n");
 		return -1;
 	}
 

@@ -79,11 +79,32 @@ endlocal
 '@
 Set-Content -Path (Join-Path $dist "run-example.cmd") -Value $run -Encoding ASCII
 
+# RemoteApp seamless-launch launcher.
+#   run-remoteapp.cmd HOST:PORT USER PASSWORD "C:\path\to\app.exe"
+# Authenticates silently (auto-logon), shows only the application window, and
+# disconnects when the app window is closed. The server must publish the app as
+# a RemoteApp (RDSH role, or TSAppAllowList on desktop Windows) - otherwise the
+# server returns RAIL_EXEC_E_HOOK_NOT_LOADED. See docs/rail-remoteapp.md section 8.
+$runApp = @'
+@echo off
+REM Seamless RemoteApp launcher.
+REM Usage: run-remoteapp.cmd HOST:PORT USER PASSWORD "C:\Path\To\App.exe"
+setlocal
+set HERE=%~dp0
+REM Point OpenSSL at the bundled legacy provider (MD4/RC4) so NTLM/NLA works.
+set OPENSSL_MODULES=%HERE%ossl-modules
+"%HERE%wfreerdp.exe" /v:%1 /u:%2 /p:%3 /app:program:"%~4" /cert:ignore /gfx:AVC444,conceal-black +clipboard /dynamic-resolution
+endlocal
+'@
+Set-Content -Path (Join-Path $dist "run-remoteapp.cmd") -Value $runApp -Encoding ASCII
+
 $readme = @'
 wfreerdp (FreeRDP 3.x) - 64-bit standalone build with H.264 black-block concealment
 
 Contents
   wfreerdp.exe            - the client
+  run-example.cmd         - desktop session launcher
+  run-remoteapp.cmd       - seamless RemoteApp launcher (app window only)
   lib*3.dll               - FreeRDP / WinPR libraries
   libcrypto/libssl*.dll   - OpenSSL 3.x (TLS)
   ossl-modules\legacy.dll - OpenSSL legacy provider (MD4/RC4; required for NTLM/NLA)
@@ -105,6 +126,15 @@ Notes
   - openh264.dll MUST sit next to wfreerdp.exe for AVC444/H.264 to work.
   - Prefer /from-stdin over /p:PASS to avoid leaking credentials in the
     process list.
+
+Seamless RemoteApp launch
+  run-remoteapp.cmd HOST:PORT USER PASSWORD "C:\Path\To\App.exe"
+  Authenticates silently, shows only the application window, and disconnects
+  when the app window closes. The SERVER must publish the application as a
+  RemoteApp (RDSH role, or TSAppAllowList on desktop Windows); otherwise the
+  server returns RAIL_EXEC_E_HOOK_NOT_LOADED and no app window can appear.
+  See docs/rail-remoteapp.md section 8 for server setup and a two-step
+  client/server diagnostic.
 '@
 Set-Content -Path (Join-Path $dist "README.txt") -Value $readme -Encoding ASCII
 

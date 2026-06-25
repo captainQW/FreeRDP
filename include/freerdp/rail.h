@@ -72,6 +72,47 @@ extern "C"
 #define RAIL_EXEC_E_FAIL 0x0006
 #define RAIL_EXEC_E_SESSION_LOCKED 0x0007
 
+/* Seamless RemoteApp launch defaults: bound the retries when the server keeps
+ * answering RAIL_EXEC_E_HOOK_NOT_LOADED (its RemoteApp shell hook has not loaded
+ * yet). See freerdp_rail_exec_retry_decide(). */
+#define FREERDP_RAIL_EXEC_DEFAULT_MAX_RETRIES 30
+#define FREERDP_RAIL_EXEC_DEFAULT_RETRY_DELAY_MS 1000
+
+/* Decision returned by freerdp_rail_exec_retry_decide(): what a client should do
+ * after receiving a Server Execute Result PDU while launching a RemoteApp. */
+typedef enum
+{
+	FREERDP_RAIL_EXEC_LAUNCHED,  /* RAIL_EXEC_S_OK: app launched, stop retrying */
+	FREERDP_RAIL_EXEC_RETRY,     /* transient HOOK_NOT_LOADED, retry the Execute */
+	FREERDP_RAIL_EXEC_GIVE_UP    /* fatal or retries exhausted: hide splash + abort */
+} FREERDP_RAIL_EXEC_DECISION;
+
+/**
+ * Pure decision function for the seamless RemoteApp launch retry loop.
+ *
+ * Given the Server Execute Result code and the number of retries already
+ * performed, decide whether the launch succeeded, should be retried, or should
+ * be abandoned. Kept free of any platform/UI/network state so it is unit
+ * testable and shared by every client.
+ *
+ * @param execResult the execResult field from the Server Execute Result PDU
+ * @param retriesSoFar how many times the Execute has already been retried
+ * @param maxRetries retry budget (e.g. FREERDP_RAIL_EXEC_DEFAULT_MAX_RETRIES)
+ * @return one of FREERDP_RAIL_EXEC_DECISION
+ */
+FREERDP_API FREERDP_RAIL_EXEC_DECISION freerdp_rail_exec_retry_decide(UINT16 execResult,
+                                                                      UINT32 retriesSoFar,
+                                                                      UINT32 maxRetries);
+
+/**
+ * Pure decision function for the seamless RemoteApp lifecycle: should the
+ * session be disconnected after a RAIL window was deleted?
+ *
+ * @param remainingWindows number of RAIL windows still open after the delete
+ * @return TRUE if this was the last window and the session should disconnect
+ */
+FREERDP_API BOOL freerdp_rail_should_disconnect_on_window_delete(size_t remainingWindows);
+
 /* DEPRECATED: Server System Parameters Update PDU
  * use the spec conformant naming scheme from winpr/windows.h
  */

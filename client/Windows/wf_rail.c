@@ -871,7 +871,7 @@ static BOOL wf_rail_window_delete(rdpContext* context, const WINDOW_ORDER_INFO* 
 	 * session has nothing left to show. Disconnect so the user is never left
 	 * with an invisible (hidden host-window) connection or a flash of the remote
 	 * desktop. */
-	if (HashTable_Count(wfc->railWindows) == 0)
+	if (freerdp_rail_should_disconnect_on_window_delete(HashTable_Count(wfc->railWindows)))
 	{
 		WLog_INFO(TAG, "Last RemoteApp window closed, disconnecting session");
 		freerdp_abort_connect_context(&wfc->common.context);
@@ -1325,35 +1325,36 @@ static UINT wf_rail_server_execute_result(RailClientContext* context,
 	wfContext* wfc = (wfContext*)context->custom;
 	WINPR_ASSERT(wfc);
 
-	if (execResult->execResult != RAIL_EXEC_S_OK)
-	{
-		WLog_ERR(TAG, "RAIL exec error: execResult=%s [0x%08" PRIx32 "] NtError=0x%X",
-		         wf_rail_exec_error_code2str(execResult->execResult), execResult->execResult,
-		         execResult->rawResult);
+	const FREERDP_RAIL_EXEC_DECISION decision = freerdp_rail_exec_retry_decide(
+	    (UINT16)execResult->execResult, wfc->railExecRetries, WF_RAIL_EXEC_MAX_RETRIES);
 
-		/* RAIL_EXEC_E_HOOK_NOT_LOADED is a transient race: the server received
-		 * the Execute PDU before its RemoteApp shell hook (rdpshell) finished
-		 * loading. Rather than aborting - which drops the user back to nothing -
-		 * wait briefly and resend the launch command a few times. This is what
-		 * makes the seamless launch reliable instead of intermittently failing
-		 * right after sign-in. */
-		if ((execResult->execResult == RAIL_EXEC_E_HOOK_NOT_LOADED) &&
-		    (wfc->railExecRetries < WF_RAIL_EXEC_MAX_RETRIES))
-		{
+	switch (decision)
+	{
+		case FREERDP_RAIL_EXEC_LAUNCHED:
+			/* Successful launch: reset the retry counter. */
+			wfc->railExecRetries = 0;
+			break;
+
+		case FREERDP_RAIL_EXEC_RETRY:
+			/* RAIL_EXEC_E_HOOK_NOT_LOADED is a transient race: the server
+			 * received the Execute PDU before its RemoteApp shell hook
+			 * (rdpshell) finished loading. Rather than aborting - which drops
+			 * the user back to nothing - wait briefly and resend the launch.
+			 * This is what makes the seamless launch reliable instead of
+			 * intermittently failing right after sign-in. */
 			wfc->railExecRetries++;
-			WLog_WARN(TAG,
-			          "RemoteApp shell hook not loaded yet, retrying launch (%" PRIu32 "/%d)",
+			WLog_WARN(TAG, "RemoteApp shell hook not loaded yet, retrying launch (%" PRIu32 "/%d)",
 			          wfc->railExecRetries, WF_RAIL_EXEC_MAX_RETRIES);
 			Sleep(WF_RAIL_EXEC_RETRY_DELAY_MS);
 			return client_rail_server_start_cmd(context);
-		}
 
-		freerdp_abort_connect_context(&wfc->common.context);
-	}
-	else
-	{
-		/* Successful launch: reset the retry counter. */
-		wfc->railExecRetries = 0;
+		case FREERDP_RAIL_EXEC_GIVE_UP:
+		default:
+			WLog_ERR(TAG, "RAIL exec error: execResult=%s [0x%08" PRIx32 "] NtError=0x%X",
+			         wf_rail_exec_error_code2str(execResult->execResult), execResult->execResult,
+			         execResult->rawResult);
+			freerdp_abort_connect_context(&wfc->common.context);
+			break;
 	}
 
 	return CHANNEL_RC_OK;

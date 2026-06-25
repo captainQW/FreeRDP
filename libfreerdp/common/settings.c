@@ -38,6 +38,7 @@
 #include <freerdp/crypto/certificate.h>
 #include <freerdp/settings.h>
 #include <freerdp/freerdp.h>
+#include <freerdp/rail.h>
 #include <freerdp/log.h>
 
 #define TAG FREERDP_TAG("common")
@@ -2178,6 +2179,35 @@ const char* freerdp_rail_support_flags_to_string(UINT32 flags, char* buffer, siz
 		winpr_str_append(tbuffer, buffer, length, "|");
 	}
 	return buffer;
+}
+
+FREERDP_RAIL_EXEC_DECISION freerdp_rail_exec_retry_decide(UINT16 execResult, UINT32 retriesSoFar,
+                                                          UINT32 maxRetries)
+{
+	/* The remote application launched successfully. */
+	if (execResult == RAIL_EXEC_S_OK)
+		return FREERDP_RAIL_EXEC_LAUNCHED;
+
+	/* RAIL_EXEC_E_HOOK_NOT_LOADED is the only transient/retryable result: the
+	 * server's RemoteApp shell hook was not ready yet (typically right after
+	 * sign-in while the session shell initializes). Every other error code
+	 * (decode failed, not in allowlist, file not found, generic fail, session
+	 * locked) is terminal and must not be retried. */
+	if (execResult != RAIL_EXEC_E_HOOK_NOT_LOADED)
+		return FREERDP_RAIL_EXEC_GIVE_UP;
+
+	/* Transient: retry until the budget is exhausted, then give up cleanly. */
+	if (retriesSoFar < maxRetries)
+		return FREERDP_RAIL_EXEC_RETRY;
+
+	return FREERDP_RAIL_EXEC_GIVE_UP;
+}
+
+BOOL freerdp_rail_should_disconnect_on_window_delete(size_t remainingWindows)
+{
+	/* Seamless RemoteApp lifecycle: when the last application window is gone the
+	 * session has nothing left to show, so disconnect. */
+	return remainingWindows == 0;
 }
 
 BOOL freerdp_settings_update_from_caps(rdpSettings* settings, const BYTE* capsFlags,
