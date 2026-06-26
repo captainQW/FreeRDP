@@ -1152,6 +1152,17 @@ static DWORD WINAPI wf_client_thread(LPVOID lpParam)
 	rdpSettings* settings = context->settings;
 	WINPR_ASSERT(settings);
 
+	/* RemoteApp seamless launch: show a loading splash ("正在打开应用 ...") on
+	 * the main UI thread right after connect, until the first application window
+	 * is shown (see wf_gfx_window_handle_update) or the session ends. */
+	if (freerdp_settings_get_bool(settings, FreeRDP_RemoteApplicationMode))
+	{
+		const char* app = freerdp_settings_get_string(settings, FreeRDP_RemoteApplicationName);
+		if (!app || (strnlen(app, 1) == 0))
+			app = freerdp_settings_get_string(settings, FreeRDP_RemoteApplicationProgram);
+		wf_splash_show(wfc, app);
+	}
+
 	while (!freerdp_shall_disconnect_context(instance->context))
 	{
 		HANDLE handles[MAXIMUM_WAIT_OBJECTS] = WINPR_C_ARRAY_INIT;
@@ -1259,6 +1270,7 @@ static DWORD WINAPI wf_client_thread(LPVOID lpParam)
 	}
 
 	/* cleanup */
+	wf_splash_hide(wfc);
 	freerdp_disconnect(instance);
 
 end:

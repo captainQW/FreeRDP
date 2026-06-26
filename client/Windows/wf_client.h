@@ -168,6 +168,10 @@ extern "C"
 		CRITICAL_SECTION gfxLock;
 		BOOL gfxLockValid;
 
+		/* RemoteApp launch splash ("正在打开应用 ...") shown on the main thread
+		 * between connect and the first application window. */
+		HWND splashWnd;
+
 		BOOL isConsole;
 
 		DispClientContext* disp;

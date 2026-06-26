@@ -403,6 +403,110 @@ BOOL wf_register_graphics(rdpGraphics* graphics)
  * creates/sizes/shows the window and blits. */
 
 #define WF_GFX_WND_CLASS _T("RdpGfxAppWindow")
+#define WF_SPLASH_WND_CLASS _T("RdpRemoteAppSplash")
+
+#define WF_SPLASH_W 420
+#define WF_SPLASH_H 120
+
+static LRESULT CALLBACK wf_splash_wnd_proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+	switch (msg)
+	{
+		case WM_PAINT:
+		{
+			PAINTSTRUCT ps;
+			HDC hdc = BeginPaint(hWnd, &ps);
+			RECT rc;
+			GetClientRect(hWnd, &rc);
+
+			/* dark background + accent top bar */
+			HBRUSH bg = CreateSolidBrush(RGB(0x24, 0x28, 0x30));
+			FillRect(hdc, &rc, bg);
+			DeleteObject(bg);
+			RECT bar = { 0, 0, rc.right, 4 };
+			HBRUSH accent = CreateSolidBrush(RGB(0x3d, 0x8b, 0xfd));
+			FillRect(hdc, &bar, accent);
+			DeleteObject(accent);
+
+			/* centered message text */
+			const WCHAR* msgText = (const WCHAR*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
+			if (msgText)
+			{
+				SetBkMode(hdc, TRANSPARENT);
+				SetTextColor(hdc, RGB(0xf0, 0xf0, 0xf0));
+				DrawTextW(hdc, msgText, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+			}
+			EndPaint(hWnd, &ps);
+			return 0;
+		}
+		default:
+			break;
+	}
+	return DefWindowProc(hWnd, msg, wParam, lParam);
+}
+
+void wf_splash_show(wfContext* wfc, const char* appName)
+{
+	WINPR_ASSERT(wfc);
+	if (wfc->splashWnd)
+		return;
+
+	/* Build the "正在打开应用 <name>" message (use the trailing path component). */
+	const char* base = appName;
+	if (appName)
+	{
+		for (const char* p = appName; *p; p++)
+		{
+			if ((*p == '\\') || (*p == '/'))
+				base = p + 1;
+		}
+	}
+	char msg[300] = { 0 };
+	if (base && (strnlen(base, 1) > 0))
+		(void)_snprintf(msg, sizeof(msg), "正在打开应用 %s ...", base);
+	else
+		(void)_snprintf(msg, sizeof(msg), "正在打开远程应用 ...");
+
+	WCHAR* msgW = ConvertUtf8ToWCharAlloc(msg, nullptr);
+
+	WNDCLASSEX wc = { 0 };
+	HINSTANCE hInstance = GetModuleHandle(nullptr);
+	wc.cbSize = sizeof(WNDCLASSEX);
+	wc.lpfnWndProc = wf_splash_wnd_proc;
+	wc.hInstance = hInstance;
+	wc.hCursor = LoadCursor(nullptr, IDC_WAIT);
+	wc.lpszClassName = WF_SPLASH_WND_CLASS;
+	RegisterClassEx(&wc);
+
+	const int sw = GetSystemMetrics(SM_CXSCREEN);
+	const int sh = GetSystemMetrics(SM_CYSCREEN);
+	const int px = (sw - WF_SPLASH_W) / 2;
+	const int py = (sh - WF_SPLASH_H) / 2;
+
+	wfc->splashWnd =
+	    CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, WF_SPLASH_WND_CLASS, _T("RemoteApp"),
+	                   WS_POPUP, px, py, WF_SPLASH_W, WF_SPLASH_H, nullptr, nullptr, hInstance,
+	                   nullptr);
+	if (!wfc->splashWnd)
+	{
+		free(msgW);
+		return;
+	}
+	/* stash the message pointer for WM_PAINT (freed in wf_splash_hide) */
+	SetWindowLongPtr(wfc->splashWnd, GWLP_USERDATA, (LONG_PTR)msgW);
+	ShowWindow(wfc->splashWnd, SW_SHOWNOACTIVATE);
+	UpdateWindow(wfc->splashWnd);
+}
+
+void wf_splash_hide(wfContext* wfc)
+{
+	if (!wfc || !wfc->splashWnd)
+		return;
+	WCHAR* msgW = (WCHAR*)GetWindowLongPtr(wfc->splashWnd, GWLP_USERDATA);
+	DestroyWindow(wfc->splashWnd);
+	wfc->splashWnd = nullptr;
+	free(msgW);
+}
 
 static LRESULT CALLBACK wf_gfx_wnd_proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -497,12 +601,19 @@ static LRESULT CALLBACK wf_gfx_wnd_proc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
 			}
 			return 0;
 		}
-		case WM_CHAR:
-		case WM_SYSCHAR:
-			/* Unicode fallback for characters not covered by scancodes (e.g. IME). */
-			if (input && (msg == WM_CHAR))
-				(void)freerdp_input_send_unicode_keyboard_event(input, 0, (UINT16)wParam);
-			return 0;
+
+		case WM_SETFOCUS:
+		case WM_ACTIVATE:
+			/* Tell the core the session window has focus so input is routed to
+			 * the remote application. */
+			if (wfc)
+				(void)freerdp_set_focus(wfc->common.context.instance);
+			return DefWindowProc(hWnd, msg, wParam, lParam);
+
+		case WM_MOUSEACTIVATE:
+			/* Activate + take focus on click so the edit area receives keys. */
+			SetFocus(hWnd);
+			return MA_ACTIVATE;
 
 		case WM_CLOSE:
 			/* Closing the RemoteApp window ends the session (seamless lifecycle). */
@@ -631,6 +742,8 @@ void wf_gfx_window_handle_update(wfContext* wfc, int width, int height)
 
 	if (!IsWindowVisible(wfc->gfxWnd))
 	{
+		/* First real application content: drop the launch splash. */
+		wf_splash_hide(wfc);
 		ShowWindow(wfc->gfxWnd, SW_SHOW);
 		SetForegroundWindow(wfc->gfxWnd);
 		SetFocus(wfc->gfxWnd);
