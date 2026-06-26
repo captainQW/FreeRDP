@@ -35,7 +35,7 @@
  * after sign-in while the remote session's shell is still initializing. Resend
  * the launch up to this many times, sleeping this long between attempts, before
  * giving up. ~30s total is enough for a cold session to finish loading. */
-#define WF_RAIL_EXEC_MAX_RETRIES 30
+#define WF_RAIL_EXEC_MAX_RETRIES 90
 #define WF_RAIL_EXEC_RETRY_DELAY_MS 1000
 
 #define GET_X_LPARAM(lParam) ((UINT16)(lParam & 0xFFFF))
