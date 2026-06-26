@@ -1316,6 +1316,51 @@ static const char* wf_rail_exec_error_code2str(UINT32 code)
  *
  * @return 0 on success, otherwise a Win32 error code
  */
+/* Resend ONLY the RemoteApp Execute PDU (not the whole RAIL handshake).
+ *
+ * The transient RAIL_EXEC_E_HOOK_NOT_LOADED result means the server's RemoteApp
+ * shell hook has not finished loading yet. We must wait and re-issue the launch,
+ * but we must NOT re-send ClientStatus/SysParam each time: re-sending the
+ * handshake-level PDUs can reset the server's RAIL state machine and prevent the
+ * shell hook from ever completing. So rebuild just the Execute order from the
+ * connection settings and send it again. Mirrors the exec part of
+ * client_rail_server_start_cmd(). */
+static UINT wf_rail_resend_exec(RailClientContext* context)
+{
+	RAIL_EXEC_ORDER exec = { 0 };
+	char argsAndFile[520] = { 0 };
+	wfContext* wfc = nullptr;
+	const rdpSettings* settings = nullptr;
+	const char* file = nullptr;
+	const char* cmdline = nullptr;
+
+	WINPR_ASSERT(context);
+	wfc = (wfContext*)context->custom;
+	if (!wfc)
+		return ERROR_INTERNAL_ERROR;
+	settings = wfc->common.context.settings;
+	WINPR_ASSERT(settings);
+
+	file = freerdp_settings_get_string(settings, FreeRDP_RemoteApplicationFile);
+	cmdline = freerdp_settings_get_string(settings, FreeRDP_RemoteApplicationCmdLine);
+	if (file && cmdline)
+	{
+		(void)_snprintf(argsAndFile, ARRAYSIZE(argsAndFile), "%s %s", cmdline, file);
+		exec.RemoteApplicationArguments = argsAndFile;
+	}
+	else if (file)
+		exec.RemoteApplicationArguments = file;
+	else
+		exec.RemoteApplicationArguments = cmdline;
+
+	exec.RemoteApplicationProgram =
+	    freerdp_settings_get_string(settings, FreeRDP_RemoteApplicationProgram);
+	exec.RemoteApplicationWorkingDir =
+	    freerdp_settings_get_string(settings, FreeRDP_ShellWorkingDirectory);
+
+	return context->ClientExecute(context, &exec);
+}
+
 static UINT wf_rail_server_execute_result(RailClientContext* context,
                                           const RAIL_EXEC_RESULT_ORDER* execResult)
 {
@@ -1338,15 +1383,15 @@ static UINT wf_rail_server_execute_result(RailClientContext* context,
 		case FREERDP_RAIL_EXEC_RETRY:
 			/* RAIL_EXEC_E_HOOK_NOT_LOADED is a transient race: the server
 			 * received the Execute PDU before its RemoteApp shell hook
-			 * (rdpshell) finished loading. Rather than aborting - which drops
-			 * the user back to nothing - wait briefly and resend the launch.
-			 * This is what makes the seamless launch reliable instead of
-			 * intermittently failing right after sign-in. */
+			 * (rdpshell) finished loading. Wait briefly and resend ONLY the
+			 * Execute order (resending the full handshake would reset server
+			 * RAIL state and could stall the hook load). */
 			wfc->railExecRetries++;
-			WLog_WARN(TAG, "RemoteApp shell hook not loaded yet, retrying launch (%" PRIu32 "/%d)",
+			WLog_INFO(TAG,
+			          "Waiting for the remote application shell to start (attempt %" PRIu32 "/%d)",
 			          wfc->railExecRetries, WF_RAIL_EXEC_MAX_RETRIES);
 			Sleep(WF_RAIL_EXEC_RETRY_DELAY_MS);
-			return client_rail_server_start_cmd(context);
+			return wf_rail_resend_exec(context);
 
 		case FREERDP_RAIL_EXEC_GIVE_UP:
 		default:
