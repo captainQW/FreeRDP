@@ -31,6 +31,7 @@
 #include <freerdp/codec/region.h>
 #include <freerdp/input.h>
 #include <freerdp/scancode.h>
+#include <freerdp/client.h>
 
 #include "wf_gdi.h"
 #include "wf_graphics.h"
@@ -511,7 +512,7 @@ void wf_splash_hide(wfContext* wfc)
 static LRESULT CALLBACK wf_gfx_wnd_proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
 	wfContext* wfc = (wfContext*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
-	rdpInput* input = (wfc) ? wfc->common.context.input : nullptr;
+	rdpClientContext* cctx = (wfc) ? &wfc->common : nullptr;
 
 	switch (msg)
 	{
@@ -530,57 +531,60 @@ static LRESULT CALLBACK wf_gfx_wnd_proc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
 			return 0;
 		}
 
-		/* --- mouse: forward to the server using surface (client) coordinates --- */
+		/* --- mouse: forward to the server using surface (client) coordinates.
+		 * Use the freerdp_client_send_* helpers (same path the working desktop
+		 * mode uses); calling input->MouseEvent directly from this window thread
+		 * does not reliably reach the wire. --- */
 		case WM_LBUTTONDOWN:
 			SetCapture(hWnd);
 			SetFocus(hWnd);
-			if (input)
-				(void)input->MouseEvent(input, PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON1,
-				                        (UINT16)GET_X_LPARAM(lParam), (UINT16)GET_Y_LPARAM(lParam));
+			if (cctx)
+				(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON1,
+				                                       GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 			return 0;
 		case WM_LBUTTONUP:
 			ReleaseCapture();
-			if (input)
-				(void)input->MouseEvent(input, PTR_FLAGS_BUTTON1, (UINT16)GET_X_LPARAM(lParam),
-				                        (UINT16)GET_Y_LPARAM(lParam));
+			if (cctx)
+				(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_BUTTON1,
+				                                       GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 			return 0;
 		case WM_RBUTTONDOWN:
 			SetFocus(hWnd);
-			if (input)
-				(void)input->MouseEvent(input, PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON2,
-				                        (UINT16)GET_X_LPARAM(lParam), (UINT16)GET_Y_LPARAM(lParam));
+			if (cctx)
+				(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON2,
+				                                       GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 			return 0;
 		case WM_RBUTTONUP:
-			if (input)
-				(void)input->MouseEvent(input, PTR_FLAGS_BUTTON2, (UINT16)GET_X_LPARAM(lParam),
-				                        (UINT16)GET_Y_LPARAM(lParam));
+			if (cctx)
+				(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_BUTTON2,
+				                                       GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 			return 0;
 		case WM_MBUTTONDOWN:
-			if (input)
-				(void)input->MouseEvent(input, PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON3,
-				                        (UINT16)GET_X_LPARAM(lParam), (UINT16)GET_Y_LPARAM(lParam));
+			if (cctx)
+				(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON3,
+				                                       GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 			return 0;
 		case WM_MBUTTONUP:
-			if (input)
-				(void)input->MouseEvent(input, PTR_FLAGS_BUTTON3, (UINT16)GET_X_LPARAM(lParam),
-				                        (UINT16)GET_Y_LPARAM(lParam));
+			if (cctx)
+				(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_BUTTON3,
+				                                       GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 			return 0;
 		case WM_MOUSEMOVE:
-			if (input)
-				(void)input->MouseEvent(input, PTR_FLAGS_MOVE, (UINT16)GET_X_LPARAM(lParam),
-				                        (UINT16)GET_Y_LPARAM(lParam));
+			if (cctx)
+				(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_MOVE,
+				                                       GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 			return 0;
 		case WM_MOUSEWHEEL:
 		{
-			if (input)
+			if (cctx)
 			{
 				const INT16 delta = (INT16)GET_WHEEL_DELTA_WPARAM(wParam);
 				UINT16 flags = PTR_FLAGS_WHEEL;
-				UINT16 magnitude = (UINT16)((delta < 0 ? -delta : delta) & 0xFF);
+				const UINT16 magnitude = (UINT16)((delta < 0 ? -delta : delta) & 0xFF);
 				if (delta < 0)
 					flags |= PTR_FLAGS_WHEEL_NEGATIVE;
 				flags |= magnitude;
-				(void)input->MouseEvent(input, flags, 0, 0);
+				(void)freerdp_client_send_wheel_event(cctx, flags);
 			}
 			return 0;
 		}
@@ -591,6 +595,7 @@ static LRESULT CALLBACK wf_gfx_wnd_proc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
 		case WM_KEYUP:
 		case WM_SYSKEYUP:
 		{
+			rdpInput* input = (wfc) ? wfc->common.context.input : nullptr;
 			if (input)
 			{
 				const BOOL down = (msg == WM_KEYDOWN) || (msg == WM_SYSKEYDOWN);
