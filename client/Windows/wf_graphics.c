@@ -21,12 +21,16 @@
 
 #include <winpr/crt.h>
 
+#include <windowsx.h>
+
 #include <freerdp/codecs.h>
 #include <freerdp/log.h>
 #include <freerdp/gdi/gfx.h>
 #include <freerdp/client/rdpgfx.h>
 #include <freerdp/codec/color.h>
 #include <freerdp/codec/region.h>
+#include <freerdp/input.h>
+#include <freerdp/scancode.h>
 
 #include "wf_gdi.h"
 #include "wf_graphics.h"
@@ -403,6 +407,7 @@ BOOL wf_register_graphics(rdpGraphics* graphics)
 static LRESULT CALLBACK wf_gfx_wnd_proc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
 	wfContext* wfc = (wfContext*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
+	rdpInput* input = (wfc) ? wfc->common.context.input : nullptr;
 
 	switch (msg)
 	{
@@ -420,6 +425,85 @@ static LRESULT CALLBACK wf_gfx_wnd_proc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
 			EndPaint(hWnd, &ps);
 			return 0;
 		}
+
+		/* --- mouse: forward to the server using surface (client) coordinates --- */
+		case WM_LBUTTONDOWN:
+			SetCapture(hWnd);
+			SetFocus(hWnd);
+			if (input)
+				(void)input->MouseEvent(input, PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON1,
+				                        (UINT16)GET_X_LPARAM(lParam), (UINT16)GET_Y_LPARAM(lParam));
+			return 0;
+		case WM_LBUTTONUP:
+			ReleaseCapture();
+			if (input)
+				(void)input->MouseEvent(input, PTR_FLAGS_BUTTON1, (UINT16)GET_X_LPARAM(lParam),
+				                        (UINT16)GET_Y_LPARAM(lParam));
+			return 0;
+		case WM_RBUTTONDOWN:
+			SetFocus(hWnd);
+			if (input)
+				(void)input->MouseEvent(input, PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON2,
+				                        (UINT16)GET_X_LPARAM(lParam), (UINT16)GET_Y_LPARAM(lParam));
+			return 0;
+		case WM_RBUTTONUP:
+			if (input)
+				(void)input->MouseEvent(input, PTR_FLAGS_BUTTON2, (UINT16)GET_X_LPARAM(lParam),
+				                        (UINT16)GET_Y_LPARAM(lParam));
+			return 0;
+		case WM_MBUTTONDOWN:
+			if (input)
+				(void)input->MouseEvent(input, PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON3,
+				                        (UINT16)GET_X_LPARAM(lParam), (UINT16)GET_Y_LPARAM(lParam));
+			return 0;
+		case WM_MBUTTONUP:
+			if (input)
+				(void)input->MouseEvent(input, PTR_FLAGS_BUTTON3, (UINT16)GET_X_LPARAM(lParam),
+				                        (UINT16)GET_Y_LPARAM(lParam));
+			return 0;
+		case WM_MOUSEMOVE:
+			if (input)
+				(void)input->MouseEvent(input, PTR_FLAGS_MOVE, (UINT16)GET_X_LPARAM(lParam),
+				                        (UINT16)GET_Y_LPARAM(lParam));
+			return 0;
+		case WM_MOUSEWHEEL:
+		{
+			if (input)
+			{
+				const INT16 delta = (INT16)GET_WHEEL_DELTA_WPARAM(wParam);
+				UINT16 flags = PTR_FLAGS_WHEEL;
+				UINT16 magnitude = (UINT16)((delta < 0 ? -delta : delta) & 0xFF);
+				if (delta < 0)
+					flags |= PTR_FLAGS_WHEEL_NEGATIVE;
+				flags |= magnitude;
+				(void)input->MouseEvent(input, flags, 0, 0);
+			}
+			return 0;
+		}
+
+		/* --- keyboard: convert the Win32 scancode to an RDP scancode --- */
+		case WM_KEYDOWN:
+		case WM_SYSKEYDOWN:
+		case WM_KEYUP:
+		case WM_SYSKEYUP:
+		{
+			if (input)
+			{
+				const BOOL down = (msg == WM_KEYDOWN) || (msg == WM_SYSKEYDOWN);
+				const BYTE scancode = (BYTE)((lParam >> 16) & 0xFF);
+				const BOOL extended = ((lParam & (1 << 24)) != 0);
+				const UINT32 rdpScancode = MAKE_RDP_SCANCODE(scancode, extended);
+				(void)freerdp_input_send_keyboard_event_ex(input, down, FALSE, rdpScancode);
+			}
+			return 0;
+		}
+		case WM_CHAR:
+		case WM_SYSCHAR:
+			/* Unicode fallback for characters not covered by scancodes (e.g. IME). */
+			if (input && (msg == WM_CHAR))
+				(void)freerdp_input_send_unicode_keyboard_event(input, 0, (UINT16)wParam);
+			return 0;
+
 		case WM_CLOSE:
 			/* Closing the RemoteApp window ends the session (seamless lifecycle). */
 			if (wfc)
@@ -487,10 +571,8 @@ void wf_gfx_window_handle_update(wfContext* wfc, int width, int height)
 
 		wfc->gfxWnd = CreateWindowEx(WS_EX_APPWINDOW, WF_GFX_WND_CLASS,
 		                             wfc->window_title ? wfc->window_title : _T("RemoteApp"),
-		                             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
-		                                 WS_MAXIMIZEBOX | WS_SIZEBOX,
-		                             CW_USEDEFAULT, CW_USEDEFAULT, width, height, nullptr, nullptr,
-		                             hInstance, nullptr);
+		                             WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT, width, height, nullptr,
+		                             nullptr, hInstance, nullptr);
 		if (!wfc->gfxWnd)
 		{
 			WLog_ERR(TAG, "GFX app window CreateWindowEx failed: %lu", GetLastError());
@@ -548,7 +630,11 @@ void wf_gfx_window_handle_update(wfContext* wfc, int width, int height)
 	}
 
 	if (!IsWindowVisible(wfc->gfxWnd))
+	{
 		ShowWindow(wfc->gfxWnd, SW_SHOW);
+		SetForegroundWindow(wfc->gfxWnd);
+		SetFocus(wfc->gfxWnd);
+	}
 	InvalidateRect(wfc->gfxWnd, nullptr, FALSE);
 	UpdateWindow(wfc->gfxWnd);
 }
