@@ -58,6 +58,12 @@ extern "C"
 #define SYSCOMMAND_ID_SMARTSIZING 1000
 #define SYSCOMMAND_ID_REQUEST_CONTROL 1001
 
+/* Posted from the GFX (DVC) thread to the main UI thread to (re)create, size
+ * and show the HiDef RemoteApp window and trigger a repaint. The window must be
+ * created and pumped on the main thread or it never receives WM_PAINT.
+ * wParam = width, lParam = height. */
+#define WM_FREERDP_GFX_UPDATE (WM_USER + 101)
+
 	typedef struct
 	{
 		rdpBitmap _bitmap;
@@ -143,6 +149,25 @@ extern "C"
 		/* Number of times the RemoteApp launch (Execute PDU) has been retried
 		 * after a transient RAIL_EXEC_E_HOOK_NOT_LOADED result. */
 		UINT32 railExecRetries;
+
+		/* HiDef RemoteApp (RDPGFX MapSurfaceToWindow): some servers deliver the
+		 * application content as a GFX surface mapped to a window instead of via
+		 * RAIL window orders. These back a single borderless top-level window
+		 * that mirrors that surface so the app is actually visible. The window
+		 * and all GDI objects are owned by the main UI thread; the GFX/DVC
+		 * thread only stages decoded pixels into gfxData (guarded by gfxLock)
+		 * and posts WM_FREERDP_GFX_UPDATE. */
+		HWND gfxWnd;
+		HDC gfxHdc;
+		HBITMAP gfxBitmap;
+		BYTE* gfxDibBits;  /* DIB section bits, main thread only */
+		BYTE* gfxData;     /* staging buffer written by the GFX thread */
+		int gfxWidth;
+		int gfxHeight;
+		UINT64 gfxWindowId;
+		CRITICAL_SECTION gfxLock;
+		BOOL gfxLockValid;
+
 		BOOL isConsole;
 
 		DispClientContext* disp;

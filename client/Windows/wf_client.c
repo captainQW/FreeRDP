@@ -1233,6 +1233,13 @@ static DWORD WINAPI wf_client_thread(LPVOID lpParam)
 					}
 					break;
 				}
+				case WM_FREERDP_GFX_UPDATE:
+				{
+					/* HiDef RemoteApp: (re)create/size/show the app window on the
+					 * main thread and repaint it from the staged GFX surface. */
+					wf_gfx_window_handle_update(wfc, (int)msg.wParam, (int)msg.lParam);
+					break;
+				}
 				default:
 					break;
 			}

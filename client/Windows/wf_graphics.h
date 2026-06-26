@@ -37,4 +37,8 @@ BOOL wf_register_graphics(rdpGraphics* graphics);
 void wf_graphics_pipeline_init(wfContext* wfc, RdpgfxClientContext* gfx);
 void wf_graphics_pipeline_uninit(wfContext* wfc, RdpgfxClientContext* gfx);
 
+/* HiDef RemoteApp window helpers (main UI thread only). */
+void wf_gfx_window_handle_update(wfContext* wfc, int width, int height);
+void wf_gfx_window_free(wfContext* wfc);
+
 #endif /* FREERDP_CLIENT_WIN_GRAPHICS_H */
