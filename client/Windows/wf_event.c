@@ -78,6 +78,22 @@ LRESULT CALLBACK wf_ll_kbd_proc(int nCode, WPARAM wParam, LPARAM lParam)
 
 	DEBUG_KBD("Low-level keyboard hook, hWnd %X nCode %X wParam %X", g_focus_hWnd, nCode, wParam);
 
+	/* RemoteApp/RAIL mode: the per-application RAIL windows forward keyboard
+	 * input themselves in wf_RailWndProc (the hidden host window never owns
+	 * focus here). If this global hook also processed and swallowed keys it
+	 * would either double-send or, when g_focus_hWnd is stale/null, race with
+	 * the RAIL window. Let keys pass straight through to the focused RAIL
+	 * window instead. */
+	if (g_main_hWnd)
+	{
+		wfContext* hookWfc = (wfContext*)GetWindowLongPtr(g_main_hWnd, GWLP_USERDATA);
+		if (hookWfc &&
+		    freerdp_settings_get_bool(hookWfc->common.context.settings, FreeRDP_RemoteApplicationMode))
+		{
+			return CallNextHookEx(nullptr, nCode, wParam, lParam);
+		}
+	}
+
 	if (g_flipping_in)
 	{
 		if (!alt_ctrl_down())

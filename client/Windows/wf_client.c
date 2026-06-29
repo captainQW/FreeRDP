@@ -548,7 +548,7 @@ static BOOL wf_post_connect(freerdp* instance)
 		return FALSE;
 
 #ifdef WITH_PROGRESS_BAR
-	if (wfc->taskBarList)
+	if (wfc->taskBarList && !remoteApp)
 	{
 		ShowWindow(wfc->hwnd, SW_SHOWMINIMIZED);
 		wfc->taskBarList->lpVtbl->SetProgressState(wfc->taskBarList, wfc->hwnd, TBPF_INDETERMINATE);

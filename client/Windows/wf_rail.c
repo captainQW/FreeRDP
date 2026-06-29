@@ -24,9 +24,15 @@
 #include <winpr/tchar.h>
 #include <winpr/print.h>
 
+#include <windowsx.h>
 #include <shellapi.h>
 
+#include <freerdp/input.h>
+#include <freerdp/scancode.h>
+#include <freerdp/client.h>
+
 #include "wf_rail.h"
+#include "wf_graphics.h"
 
 #define TAG CLIENT_TAG("windows")
 
@@ -396,9 +402,8 @@ LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 	UINT32 xPos;
 	UINT32 yPos;
 	PAINTSTRUCT ps;
-	UINT32 inputFlags;
 	wfContext* wfc = nullptr;
-	rdpInput* input = nullptr;
+	rdpClientContext* cctx = nullptr;
 	rdpContext* context = nullptr;
 	wfRailWindow* railWindow;
 	railWindow = (wfRailWindow*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
@@ -407,10 +412,10 @@ LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 		wfc = railWindow->wfc;
 
 	if (wfc)
+	{
 		context = (rdpContext*)wfc;
-
-	if (context)
-		input = context->input;
+		cctx = &wfc->common;
+	}
 
 	switch (msg)
 	{
@@ -430,78 +435,171 @@ LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 		}
 		break;
 
+		/* Mouse input is forwarded to the server in remote desktop (surface)
+		 * coordinates: the RAIL window mirrors a region of the shared desktop
+		 * surface at offset (railWindow->x, railWindow->y). Use the
+		 * freerdp_client_send_* helpers (the same path the GFX/desktop windows
+		 * use); calling input->MouseEvent directly from this window thread does
+		 * not reliably reach the wire. */
 		case WM_LBUTTONDOWN:
 		{
-			if (!railWindow || !input)
+			if (!railWindow || !cctx)
 				return 0;
-
+			SetCapture(hWnd);
+			SetFocus(hWnd);
+			(void)freerdp_settings_set_bool(wfc->common.context.settings, FreeRDP_SuspendInput,
+			                                FALSE);
 			xPos = GET_X_LPARAM(lParam) + railWindow->x;
 			yPos = GET_Y_LPARAM(lParam) + railWindow->y;
-			inputFlags = PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON1;
-
-			if (input)
-				input->MouseEvent(input, inputFlags, xPos, yPos);
+			(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON1,
+			                                       xPos, yPos);
+			WLog_INFO(TAG, "RAIL LBUTTONDOWN local=(%d,%d) surface=(%u,%u) suspend=%d active=%d",
+			          GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), xPos, yPos,
+			          freerdp_settings_get_bool(wfc->common.context.settings, FreeRDP_SuspendInput),
+			          freerdp_is_active_state(&wfc->common.context));
 		}
 		break;
 
 		case WM_LBUTTONUP:
 		{
-			if (!railWindow || !input)
+			if (!railWindow || !cctx)
 				return 0;
-
+			ReleaseCapture();
 			xPos = GET_X_LPARAM(lParam) + railWindow->x;
 			yPos = GET_Y_LPARAM(lParam) + railWindow->y;
-			inputFlags = PTR_FLAGS_BUTTON1;
-
-			if (input)
-				input->MouseEvent(input, inputFlags, xPos, yPos);
+			(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_BUTTON1, xPos, yPos);
 		}
 		break;
 
 		case WM_RBUTTONDOWN:
 		{
-			if (!railWindow || !input)
+			if (!railWindow || !cctx)
 				return 0;
-
+			SetFocus(hWnd);
 			xPos = GET_X_LPARAM(lParam) + railWindow->x;
 			yPos = GET_Y_LPARAM(lParam) + railWindow->y;
-			inputFlags = PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON2;
-
-			if (input)
-				input->MouseEvent(input, inputFlags, xPos, yPos);
+			(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON2,
+			                                       xPos, yPos);
 		}
 		break;
 
 		case WM_RBUTTONUP:
 		{
-			if (!railWindow || !input)
+			if (!railWindow || !cctx)
 				return 0;
-
 			xPos = GET_X_LPARAM(lParam) + railWindow->x;
 			yPos = GET_Y_LPARAM(lParam) + railWindow->y;
-			inputFlags = PTR_FLAGS_BUTTON2;
+			(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_BUTTON2, xPos, yPos);
+		}
+		break;
 
-			if (input)
-				input->MouseEvent(input, inputFlags, xPos, yPos);
+		case WM_MBUTTONDOWN:
+		{
+			if (!railWindow || !cctx)
+				return 0;
+			xPos = GET_X_LPARAM(lParam) + railWindow->x;
+			yPos = GET_Y_LPARAM(lParam) + railWindow->y;
+			(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_DOWN | PTR_FLAGS_BUTTON3,
+			                                       xPos, yPos);
+		}
+		break;
+
+		case WM_MBUTTONUP:
+		{
+			if (!railWindow || !cctx)
+				return 0;
+			xPos = GET_X_LPARAM(lParam) + railWindow->x;
+			yPos = GET_Y_LPARAM(lParam) + railWindow->y;
+			(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_BUTTON3, xPos, yPos);
 		}
 		break;
 
 		case WM_MOUSEMOVE:
 		{
-			if (!railWindow || !input)
+			if (!railWindow || !cctx)
 				return 0;
-
 			xPos = GET_X_LPARAM(lParam) + railWindow->x;
 			yPos = GET_Y_LPARAM(lParam) + railWindow->y;
-			inputFlags = PTR_FLAGS_MOVE;
-
-			if (input)
-				input->MouseEvent(input, inputFlags, xPos, yPos);
+			(void)freerdp_client_send_button_event(cctx, FALSE, PTR_FLAGS_MOVE, xPos, yPos);
 		}
 		break;
 
 		case WM_MOUSEWHEEL:
-			break;
+		{
+			if (!cctx)
+				return 0;
+			const INT16 delta = (INT16)GET_WHEEL_DELTA_WPARAM(wParam);
+			UINT16 flags = PTR_FLAGS_WHEEL;
+			const UINT16 magnitude = (UINT16)((delta < 0 ? -delta : delta) & 0xFF);
+			if (delta < 0)
+				flags |= PTR_FLAGS_WHEEL_NEGATIVE;
+			flags |= magnitude;
+			(void)freerdp_client_send_wheel_event(cctx, flags);
+		}
+		break;
+
+		/* Keyboard: forward to the server by converting the Win32 scancode to an
+		 * RDP scancode. In RemoteApp mode the global low-level keyboard hook
+		 * (wf_ll_kbd_proc) only routes keys when the hidden host window owns
+		 * focus, which never happens for RAIL windows, so the per-window proc
+		 * must forward keys itself (mirrors wf_gfx_wnd_proc). */
+		case WM_KEYDOWN:
+		case WM_SYSKEYDOWN:
+		case WM_KEYUP:
+		case WM_SYSKEYUP:
+		{
+			rdpInput* input = (wfc) ? wfc->common.context.input : nullptr;
+			if (input)
+			{
+				const BOOL down = (msg == WM_KEYDOWN) || (msg == WM_SYSKEYDOWN);
+				const BYTE scancode = (BYTE)((lParam >> 16) & 0xFF);
+				const BOOL extended = ((lParam & (1 << 24)) != 0);
+				const UINT32 rdpScancode = MAKE_RDP_SCANCODE(scancode, extended);
+				/* The hidden host window's WM_KILLFOCUS sets SuspendInput=TRUE
+				 * when the RAIL window takes focus; that makes the core silently
+				 * drop every key. Clear it here so keystrokes actually go out. */
+				(void)freerdp_settings_set_bool(wfc->common.context.settings,
+				                                FreeRDP_SuspendInput, FALSE);
+				const BOOL sent =
+				    freerdp_input_send_keyboard_event_ex(input, down, FALSE, rdpScancode);
+				WLog_INFO(TAG,
+				          "RAIL key: msg=0x%04X down=%d vk=0x%02X sc=0x%02X ext=%d rdpSc=0x%04X "
+				          "sent=%d suspend=%d active=%d",
+				          msg, down, (unsigned)wParam, scancode, extended, rdpScancode, sent,
+				          freerdp_settings_get_bool(wfc->common.context.settings,
+				                                    FreeRDP_SuspendInput),
+				          freerdp_is_active_state(&wfc->common.context));
+			}
+			else
+			{
+				WLog_WARN(TAG, "RAIL key dropped: no input (wfc=%p)", (void*)wfc);
+			}
+		}
+		break;
+
+		case WM_SETFOCUS:
+			/* The remote app needs focus so it routes keyboard input to this
+			 * window; also notify the server via Client Activate. Clear the
+			 * SuspendInput flag the hidden host window set on WM_KILLFOCUS. */
+			if (railWindow && wfc)
+			{
+				(void)freerdp_settings_set_bool(wfc->common.context.settings,
+				                                FreeRDP_SuspendInput, FALSE);
+				(void)freerdp_set_focus(wfc->common.context.instance);
+				wf_rail_send_activate(wfc, railWindow, TRUE);
+				WLog_INFO(TAG, "RAIL WM_SETFOCUS windowId=0x%08X hWnd=%p -> input resumed",
+				          railWindow->windowId, (void*)hWnd);
+			}
+			return DefWindowProc(hWnd, msg, wParam, lParam);
+
+		case WM_MOUSEACTIVATE:
+			/* Activate + take focus on click so the window receives keys. */
+			if (wfc)
+				(void)freerdp_settings_set_bool(wfc->common.context.settings,
+				                                FreeRDP_SuspendInput, FALSE);
+			SetFocus(hWnd);
+			WLog_INFO(TAG, "RAIL WM_MOUSEACTIVATE hWnd=%p", (void*)hWnd);
+			return MA_ACTIVATE;
 
 		case WM_ACTIVATE:
 			/* Tell the server the RemoteApp window gained/lost activation so
@@ -509,7 +607,15 @@ LRESULT CALLBACK wf_RailWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 			if (railWindow && wfc)
 			{
 				const BOOL enabled = (LOWORD(wParam) != WA_INACTIVE);
+				if (enabled)
+				{
+					(void)freerdp_settings_set_bool(wfc->common.context.settings,
+					                                FreeRDP_SuspendInput, FALSE);
+					(void)freerdp_set_focus(wfc->common.context.instance);
+				}
 				wf_rail_send_activate(wfc, railWindow, enabled);
+				WLog_INFO(TAG, "RAIL WM_ACTIVATE windowId=0x%08X enabled=%d",
+				          railWindow->windowId, enabled);
 			}
 			return DefWindowProc(hWnd, msg, wParam, lParam);
 
@@ -722,6 +828,30 @@ static BOOL wf_rail_window_common(rdpContext* context, const WINDOW_ORDER_INFO* 
 		                      (void*)railWindow);
 		free(titleW);
 		UpdateWindow(railWindow->hWnd);
+
+		/* Seamless RemoteApp: the first application window is the user's entry
+		 * point. Drop the launch splash and bring the window to the foreground
+		 * with input focus so the user can type immediately. Without this the
+		 * window can appear behind/without focus (hidden host window owns the
+		 * session) and keyboard/menu input never reaches the remote app. */
+		if (freerdp_settings_get_bool(wfc->common.context.settings, FreeRDP_RemoteApplicationMode))
+		{
+			wfc->railAppLaunched = TRUE;
+			wf_splash_hide(wfc);
+			ShowWindow(railWindow->hWnd, SW_SHOW);
+			SetForegroundWindow(railWindow->hWnd);
+			SetFocus(railWindow->hWnd);
+			(void)freerdp_settings_set_bool(wfc->common.context.settings, FreeRDP_SuspendInput,
+			                                FALSE);
+			(void)freerdp_set_focus(wfc->common.context.instance);
+			wf_rail_send_activate(wfc, railWindow, TRUE);
+			WLog_INFO(TAG,
+			          "RAIL WindowCreate windowId=0x%08X hWnd=%p style=0x%08X exStyle=0x%08X "
+			          "rect=(%d,%d %dx%d) title='%s' -> shown+focused",
+			          railWindow->windowId, (void*)railWindow->hWnd, railWindow->dwStyle,
+			          railWindow->dwExStyle, railWindow->x, railWindow->y, railWindow->width,
+			          railWindow->height, railWindow->title ? railWindow->title : "");
+		}
 		return rc;
 	}
 	else
@@ -1338,6 +1468,9 @@ static UINT wf_rail_resend_exec(RailClientContext* context)
 	wfc = (wfContext*)context->custom;
 	if (!wfc)
 		return ERROR_INTERNAL_ERROR;
+	/* Do not resend the launch once the app has already appeared. */
+	if (wfc->railAppLaunched)
+		return CHANNEL_RC_OK;
 	settings = wfc->common.context.settings;
 	WINPR_ASSERT(settings);
 
@@ -1369,6 +1502,16 @@ static UINT wf_rail_server_execute_result(RailClientContext* context,
 
 	wfContext* wfc = (wfContext*)context->custom;
 	WINPR_ASSERT(wfc);
+
+	/* If the application has already appeared (RAIL window created or GFX
+	 * surface mapped to a window), the launch succeeded. Some servers keep
+	 * answering HOOK_NOT_LOADED to our earlier Execute PDUs even after the app
+	 * is up; without this guard we would resend Execute forever. */
+	if (wfc->railAppLaunched)
+	{
+		wfc->railExecRetries = 0;
+		return CHANNEL_RC_OK;
+	}
 
 	const FREERDP_RAIL_EXEC_DECISION decision = freerdp_rail_exec_retry_decide(
 	    (UINT16)execResult->execResult, wfc->railExecRetries, WF_RAIL_EXEC_MAX_RETRIES);

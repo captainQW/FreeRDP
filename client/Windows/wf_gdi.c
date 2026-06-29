@@ -325,6 +325,20 @@ void wf_resize_window(wfContext* wfc)
 	rdpSettings* settings;
 	settings = wfc->common.context.settings;
 
+	/* RemoteApp (RAIL) mode: the main window is only a hidden host for the
+	 * shared desktop surface and must never be sized/shown as a visible window.
+	 * Keep it a zero-size, off-screen popup so the remote desktop is never
+	 * presented; the individual application windows are created elsewhere
+	 * (wf_rail.c / the GFX app window). */
+	if (freerdp_settings_get_bool(settings, FreeRDP_RemoteApplicationMode))
+	{
+		SetWindowLongPtr(wfc->hwnd, GWL_STYLE, WS_POPUP);
+		SetWindowPos(wfc->hwnd, nullptr, -32000, -32000, 0, 0,
+		             SWP_NOACTIVATE | SWP_NOZORDER | SWP_HIDEWINDOW);
+		wf_update_offset(wfc);
+		return;
+	}
+
 	if (wfc->fullscreen)
 	{
 		if (freerdp_settings_get_bool(wfc->common.context.settings, FreeRDP_UseMultimon))

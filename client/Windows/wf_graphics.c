@@ -665,6 +665,44 @@ void wf_gfx_window_free(wfContext* wfc)
 	}
 }
 
+/* Reliably bring a window to the foreground with input focus. A plain
+ * SetForegroundWindow() is frequently refused by Windows when the calling
+ * process does not already own the foreground (foreground-lock policy), which
+ * leaves the RemoteApp window visible but unfocused so keystrokes and menu
+ * clicks never reach the remote app. Mirror what mstsc/Explorer do: temporarily
+ * attach our thread input to the current foreground thread so the focus change
+ * is allowed, then restore. */
+static void wf_force_foreground(HWND hWnd)
+{
+	if (!hWnd)
+		return;
+
+	HWND fg = GetForegroundWindow();
+	const DWORD fgThread = (fg) ? GetWindowThreadProcessId(fg, nullptr) : 0;
+	const DWORD thisThread = GetCurrentThreadId();
+	BOOL attached = FALSE;
+
+	if (fgThread && (fgThread != thisThread))
+		attached = AttachThreadInput(thisThread, fgThread, TRUE);
+
+	/* Briefly relax the foreground-lock timeout so SetForegroundWindow succeeds. */
+	DWORD lockTimeout = 0;
+	SystemParametersInfo(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, &lockTimeout, 0);
+	SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, (PVOID)0, SPIF_SENDCHANGE);
+
+	ShowWindow(hWnd, SW_SHOW);
+	SetForegroundWindow(hWnd);
+	BringWindowToTop(hWnd);
+	SetActiveWindow(hWnd);
+	SetFocus(hWnd);
+
+	SystemParametersInfo(SPI_SETFOREGROUNDLOCKTIMEOUT, 0,
+	                     (PVOID)(UINT_PTR)lockTimeout, SPIF_SENDCHANGE);
+
+	if (attached)
+		AttachThreadInput(thisThread, fgThread, FALSE);
+}
+
 /* Main-thread handler for WM_FREERDP_GFX_UPDATE: (re)create the window + backing
  * DIB to match the surface size, copy the staged pixels in, and repaint. */
 void wf_gfx_window_handle_update(wfContext* wfc, int width, int height)
@@ -747,11 +785,11 @@ void wf_gfx_window_handle_update(wfContext* wfc, int width, int height)
 
 	if (!IsWindowVisible(wfc->gfxWnd))
 	{
-		/* First real application content: drop the launch splash. */
+		/* First real application content: drop the launch splash and bring the
+		 * app window to the foreground with input focus (robustly - a bare
+		 * SetForegroundWindow is often refused for a background process). */
 		wf_splash_hide(wfc);
-		ShowWindow(wfc->gfxWnd, SW_SHOW);
-		SetForegroundWindow(wfc->gfxWnd);
-		SetFocus(wfc->gfxWnd);
+		wf_force_foreground(wfc->gfxWnd);
 	}
 	InvalidateRect(wfc->gfxWnd, nullptr, FALSE);
 	UpdateWindow(wfc->gfxWnd);
@@ -767,6 +805,10 @@ static UINT wf_MapWindowForSurface(RdpgfxClientContext* context, UINT16 surfaceI
 
 	WINPR_UNUSED(surfaceId);
 	wfc->gfxWindowId = windowId;
+	/* The remote application has appeared as a window-mapped GFX surface; mark
+	 * the launch as done so the RAIL Execute-retry loop stops (some servers keep
+	 * replying HOOK_NOT_LOADED even after the app is up). */
+	wfc->railAppLaunched = TRUE;
 	/* The window is created lazily on the first surface update (on the main
 	 * thread), when we know the surface dimensions. */
 	return CHANNEL_RC_OK;

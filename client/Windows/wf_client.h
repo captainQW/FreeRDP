@@ -149,6 +149,12 @@ extern "C"
 		/* Number of times the RemoteApp launch (Execute PDU) has been retried
 		 * after a transient RAIL_EXEC_E_HOOK_NOT_LOADED result. */
 		UINT32 railExecRetries;
+		/* Set once the remote application has actually appeared (a RAIL window
+		 * was created or a GFX surface was mapped to a window). Stops the
+		 * Execute-retry loop: some servers keep answering HOOK_NOT_LOADED to
+		 * repeated Execute PDUs even after the app launched, which otherwise
+		 * spins forever. */
+		BOOL railAppLaunched;
 
 		/* HiDef RemoteApp (RDPGFX MapSurfaceToWindow): some servers deliver the
 		 * application content as a GFX surface mapped to a window instead of via
